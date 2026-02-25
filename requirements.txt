@@ -1,0 +1,5 @@
+torch>=2.0
+pyyaml>=6.0
+numpy>=1.24
+pybind11>=2.11
+pytest>=7.0

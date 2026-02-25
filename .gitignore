@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+*.zip
+.ipynb_checkpoints/
+build/
+dist/
+*.so
+
