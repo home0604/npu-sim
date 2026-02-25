@@ -135,4 +135,6 @@ class SimStats:
         print(f"  SRAM Bank Conflicts:   {s['memory']['sram_bank_conflicts']:,}")
         print(f"  DB Hits/Misses:        {s['memory']['double_buffer_hits']}/{s['memory']['double_buffer_misses']}")
         print(f"  DB Stall Cycles:       {s['memory']['double_buffer_stall_cycles']:,}")
+        if s["memory"]["double_buffer_misses"] > 0 and s["memory"]["double_buffer_hits"] == 0:
+            print("  (DB 0 hits: prefetch slower than compute → memory bound)")
         print("=" * 60)
