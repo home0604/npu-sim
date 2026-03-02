@@ -21,12 +21,25 @@ fi
 
 cd "$EXT_DIR/DRAMsim3"
 
-# Build DRAMSim3 as shared library
+# Build DRAMSim3 as shared library (cmake if available, else Makefile)
 echo "Building DRAMSim3..."
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON
-make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-cd ..
+NPROC=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+
+if command -v cmake &>/dev/null; then
+    mkdir -p build && cd build
+    cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+    make -j$NPROC
+    cd ..
+    # CMake puts libdramsim3.so in PROJECT_SOURCE_DIR (repo root), not build/
+fi
+# Library is always in repo root (cmake: LIBRARY_OUTPUT_DIRECTORY, Makefile: default)
+DRAMSIM3_LIB_DIR="$EXT_DIR/DRAMsim3"
+
+if ! command -v cmake &>/dev/null; then
+    echo "cmake not found, using bundled Makefile."
+    (cd "$EXT_DIR/DRAMsim3" && git submodule update --init --recursive 2>/dev/null) || true
+    make -j$NPROC
+fi
 
 echo "DRAMSim3 built successfully."
 
@@ -77,8 +90,8 @@ fi
 # Get Python extension suffix
 PY_EXT_SUFFIX=$(python3 -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))" 2>/dev/null || echo ".so")
 
-# Compile
-DRAMSIM3_LIB="$DRAMSIM3_DIR/build"
+# Compile (libdramsim3.so is always in repo root per CMakeLists.txt / Makefile)
+DRAMSIM3_LIB="${DRAMSIM3_LIB_DIR:-$DRAMSIM3_DIR}"
 DRAMSIM3_INC="$DRAMSIM3_DIR/src"
 
 # Detect OS for correct flags

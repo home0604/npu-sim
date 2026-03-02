@@ -47,6 +47,11 @@ python3 npu_sim/scripts/run_sim.py --workload attention --seq-len 128 --hidden-d
 python3 npu_sim/scripts/run_sim.py --workload transformer --seq-len 128 --hidden-dim 768 --num-heads 12
 ```
 
+### Using DRAMSim3
+- Build DRAMSim3 and the pybind11 wrapper: `scripts/setup_dramsim3.sh`
+- Enable via config: in `configs/default.yaml` set `dram.use_dramsim3: true`, or run with `--use-dramsim3`
+- The simulator uses a synchronous adapter so the existing scheduler (no event-driven DRAM) works unchanged; completion cycles are resolved by ticking DRAMSim3 and the event queue until the request finishes.
+
 ### Next Steps for Research
 - `scripts/setup_dramsim3.sh` 실행하여 DRAMSim3 연동
 - SRAM banking/port type sweep: `config.yaml`에서 `num_banks`, `port_type` 변경

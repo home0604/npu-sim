@@ -6,8 +6,8 @@ systolic:
   clock_freq_mhz: 1000
 
 dtype:
-  compute_dtype: "INT8"
-  accumulator_dtype: "INT32"
+  compute_dtype: "FP16"
+  accumulator_dtype: "FP32"
 
 sram:
   total_size_kb: 512
@@ -21,11 +21,12 @@ sram:
   output_buffer_fraction: 0.3
 
 dram:
-  config_file: "configs/dramsim3/DDR4_8Gb_x16_2400.ini"
-  output_dir: "/tmp/dramsim3_output"
-  # Simple DRAM fallback params (when DRAMSim3 not available)
+  use_dramsim3: true  # set true to use DRAMSim3 (requires build via scripts/setup_dramsim3.sh)
+  config_file: "ext/DRAMsim3/configs/DDR4_8Gb_x16_2400.ini"
+  output_dir: "dramsim3_output"
+  # Simple DRAM fallback params (when use_dramsim3 is false or DRAMSim3 unavailable)
   bandwidth_gbps: 25.6
-  latency_ns: 50
+  latency_ns: 50.0
 
 double_buffer:
   enabled: true

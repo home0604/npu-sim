@@ -42,8 +42,9 @@ class SRAMConfig:
 
 @dataclass
 class DRAMConfig:
-    config_file: str = "configs/dramsim3/DDR4_8Gb_x16_2400.ini"
-    output_dir: str = "/tmp/dramsim3_output"
+    use_dramsim3: bool = False
+    config_file: str = "ext/DRAMsim3/configs/DDR4_8Gb_x16_2400.ini"
+    output_dir: str = "dramsim3_output"
     bandwidth_gbps: float = 25.6
     latency_ns: float = 50.0
 

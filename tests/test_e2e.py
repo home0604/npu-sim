@@ -48,6 +48,21 @@ def test_matmul_cycle_sanity():
     assert result["total_cycles"] >= 190
 
 
+def test_matmul_correctness_check():
+    """Functionality check: tile-by-tile output must match reference."""
+    sim = make_simulator(rows=32, cols=32, sram_kb=512)
+    result = sim.run_matmul(M=32, N=32, K=64, check_correctness=True)
+    assert result["correctness"] == "pass"
+    assert "correctness_message" in result
+
+
+def test_matmul_correctness_check_multi_tile():
+    """Functionality check with multiple tiles (larger MatMul)."""
+    sim = make_simulator(rows=32, cols=32, sram_kb=512)
+    result = sim.run_matmul(M=128, N=128, K=128, check_correctness=True)
+    assert result["correctness"] == "pass"
+
+
 def test_matmul_larger_array_is_faster():
     """A larger array should complete in fewer cycles (compute-bound case)."""
     sim_small = make_simulator(rows=16, cols=16, sram_kb=512)
@@ -97,6 +112,18 @@ def test_attention_workload():
     assert result["compute"]["tiles_processed"] > 0
 
 
+def test_attention_correctness_check():
+    """Functionality check: attention output must match reference."""
+    sim = make_simulator(rows=32, cols=32, sram_kb=512)
+    result = sim.run_attention(
+        seq_len=16, hidden_dim=64, num_heads=2,
+        check_correctness=True,
+    )
+    assert result["correctness"] == "pass"
+    assert "correctness_message" in result
+    assert "correctness_report" in result
+
+
 def test_transformer_layer():
     """Test running a full transformer layer."""
     sim = make_simulator(rows=32, cols=32, sram_kb=512)
@@ -106,6 +133,18 @@ def test_transformer_layer():
 
     assert result["total_cycles"] > 0
     assert result["compute"]["tiles_processed"] > 0
+
+
+def test_transformer_layer_correctness_check():
+    """Functionality check: transformer layer output must match reference."""
+    sim = make_simulator(rows=32, cols=32, sram_kb=512)
+    result = sim.run_transformer_layer(
+        seq_len=16, hidden_dim=64, num_heads=2,
+        check_correctness=True,
+    )
+    assert result["correctness"] == "pass"
+    assert "correctness_message" in result
+    assert "correctness_report" in result
 
 
 def test_different_dtypes():

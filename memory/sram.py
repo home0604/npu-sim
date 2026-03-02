@@ -48,6 +48,7 @@ class BankedSRAM:
         self.bank_size = size_bytes // num_banks
 
         # Per-bank busy tracking
+        # bank busy는 해당 뱅크가 언제 사용 가능한지 cycle을 저장.
         if port_type == PortType.SINGLE:
             self._bank_busy: list[int] = [0] * num_banks
         else:

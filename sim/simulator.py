@@ -7,17 +7,32 @@ import torch
 from ..compute.special_functions import SpecialFunctionUnit
 from ..compute.systolic_array import SystolicArray
 from ..core.clock import SimulationEngine
-from ..core.config import NPUConfig, load_config
+from ..core.config import DataTypeConfig, NPUConfig, load_config
 from ..core.datatypes import AccumulatorType, DataType
 from ..core.stats import LayerStats, SimStats
 from ..dataflow.scheduler import TileScheduler
 from ..dataflow.tiler import Tiler
 from ..dataflow.ws_dataflow import WSDataflow
-from ..memory.dram_interface import SimpleDRAMModel
+from ..memory.dram_interface import (
+    DRAMSim3Adapter,
+    DRAMSim3Interface,
+    SimpleDRAMModel,
+)
 from ..memory.double_buffer import DoubleBufferController
 from ..memory.memory_controller import MemoryController
 from ..memory.sram import BankedSRAM, PortType
 from ..memory.sram_buffers import SRAMBuffer, create_buffer_partitions
+from .functional_check import (
+    compare_outputs,
+    compute_diff_report,
+    format_diff_report,
+    reference_attention,
+    reference_matmul,
+    reference_transformer_layer,
+    run_attention_functional,
+    run_schedule_functional,
+    run_transformer_layer_functional,
+)
 
 
 class NPUSimulator:
@@ -72,12 +87,40 @@ class NPUSimulator:
             double_buffer=config.double_buffer.enabled,
         )
 
-        # DRAM
-        self.dram = SimpleDRAMModel(
-            bandwidth_gbps=config.dram.bandwidth_gbps,
-            latency_ns=config.dram.latency_ns,
-            clock_freq_mhz=config.systolic.clock_freq_mhz,
-        )
+        # DRAM: SimpleDRAMModel (analytical) or DRAMSim3 (cycle-accurate) via adapter
+        if getattr(config.dram, "use_dramsim3", False):
+            try:
+                _pkg_root = Path(__file__).resolve().parent.parent
+                _config_file = config.dram.config_file
+                if not Path(_config_file).is_absolute():
+                    _config_file = str(_pkg_root / _config_file)
+                _output_dir = config.dram.output_dir
+                if not Path(_output_dir).is_absolute():
+                    _output_dir = str(_pkg_root / _output_dir)
+                Path(_output_dir).mkdir(parents=True, exist_ok=True)
+                _dramsim = DRAMSim3Interface(
+                    config_file=_config_file,
+                    output_dir=_output_dir,
+                    sim_engine=self.engine,
+                )
+                self.dram = DRAMSim3Adapter(_dramsim, self.engine)
+            except ImportError as e:
+                import warnings
+
+                warnings.warn(
+                    f"DRAMSim3 requested but not available: {e}. Using SimpleDRAMModel."
+                )
+                self.dram = SimpleDRAMModel(
+                    bandwidth_gbps=config.dram.bandwidth_gbps,
+                    latency_ns=config.dram.latency_ns,
+                    clock_freq_mhz=config.systolic.clock_freq_mhz,
+                )
+        else:
+            self.dram = SimpleDRAMModel(
+                bandwidth_gbps=config.dram.bandwidth_gbps,
+                latency_ns=config.dram.latency_ns,
+                clock_freq_mhz=config.systolic.clock_freq_mhz,
+            )
 
         # Memory controller
         self.mem_ctrl = MemoryController(self.dram, self.sram, self.engine)
@@ -132,10 +175,19 @@ class NPUSimulator:
         weight_base: int = 0,
         act_base: int = 0,
         output_base: int = 0,
+        check_correctness: bool = False,
+        weight: torch.Tensor | None = None,
+        activation: torch.Tensor | None = None,
+        seed: int | None = 42,
     ) -> dict:
         """Simulate a single MatMul: C[M,N] = A[M,K] * B[K,N].
 
-        Returns summary statistics dict.
+        If check_correctness is True, runs the same tile schedule with real tensors
+        and compares output to a reference (PyTorch matmul). Optionally pass
+        weight (A) and activation (B); if None, random tensors are generated (seed).
+
+        Returns summary statistics dict; when check_correctness is True, includes
+        "correctness": "pass" | "fail" and "correctness_message".
         """
         # Generate tile schedule
         tile_config, schedule = self.dataflow.generate_schedule(
@@ -144,6 +196,46 @@ class NPUSimulator:
             activation_base_addr=act_base,
             output_base_addr=output_base,
         )
+
+        # Functionality check (before cycle sim): verify mul/accum per data type vs reference
+        correctness_pass: bool | None = None
+        correctness_message: str | None = None
+        correctness_report: dict | None = None
+        if check_correctness:
+            if weight is None or activation is None:
+                gen = torch.Generator()
+                if seed is not None:
+                    gen.manual_seed(seed)
+                if self.dtype == DataType.INT8:
+                    weight = torch.randint(
+                        -128, 128, (M, K), dtype=self.dtype.torch_dtype, generator=gen
+                    )
+                    activation = torch.randint(
+                        -128, 128, (K, N), dtype=self.dtype.torch_dtype, generator=gen
+                    )
+                else:
+                    weight = torch.randn(M, K, generator=gen).to(self.dtype.torch_dtype)
+                    activation = torch.randn(K, N, generator=gen).to(self.dtype.torch_dtype)
+            C_ref = reference_matmul(weight, activation, self.acc_dtype)
+            C_sim = run_schedule_functional(
+                schedule, tile_config, weight, activation, self.systolic, M, N, K
+            )
+            # FP32: ref = one-shot matmul, sim = tile accumulate → small diff (tiling+acc error).
+            # Use relaxed tol so we pass but report shows the actual NPU-side error.
+            rtol, atol = 1e-5, 1e-5
+            if self.acc_dtype == AccumulatorType.FP32:
+                rtol, atol = 1e-3, 1e-2
+            correctness_pass, correctness_message = compare_outputs(
+                C_sim, C_ref, self.acc_dtype, rtol=rtol, atol=atol
+            )
+            correctness_report = compute_diff_report(
+                C_sim, C_ref, self.acc_dtype, rtol=rtol, atol=atol, max_sample=10
+            )
+            if not correctness_pass:
+                raise AssertionError(
+                    f"Functionality check failed: {correctness_message}\n"
+                    f"{format_diff_report(correctness_report)}"
+                )
 
         # Update tile stats
         self.stats.tile.tile_m = tile_config.tile_m
@@ -171,7 +263,13 @@ class NPUSimulator:
             )
         )
 
-        return self.stats.summary()
+        summary = self.stats.summary()
+        if check_correctness and correctness_pass is not None:
+            summary["correctness"] = "pass" if correctness_pass else "fail"
+            summary["correctness_message"] = correctness_message or ""
+            if correctness_report is not None:
+                summary["correctness_report"] = correctness_report
+        return summary
 
     def run_attention(
         self,
@@ -179,6 +277,11 @@ class NPUSimulator:
         hidden_dim: int,
         num_heads: int,
         head_dim: int | None = None,
+        check_correctness: bool = False,
+        x: torch.Tensor | None = None,
+        W_qkv: torch.Tensor | None = None,
+        W_o: torch.Tensor | None = None,
+        seed: int | None = 42,
     ) -> dict:
         """Simulate multi-head attention.
 
@@ -188,9 +291,41 @@ class NPUSimulator:
         3. Softmax
         4. Attention output: H x MatMul(seq_len, head_dim, seq_len)
         5. Output projection: MatMul(seq_len, hidden_dim, hidden_dim)
+
+        If check_correctness is True, runs reference and functional attention and
+        compares outputs; optionally pass x, W_qkv, W_o or use random (seed).
         """
         if head_dim is None:
             head_dim = hidden_dim // num_heads
+
+        correctness_pass: bool | None = None
+        correctness_report: dict | None = None
+        if check_correctness:
+            gen = torch.Generator()
+            if seed is not None:
+                gen.manual_seed(seed)
+            if x is None:
+                x = torch.randn(seq_len, hidden_dim, generator=gen)
+            if W_qkv is None:
+                W_qkv = torch.randn(hidden_dim, 3 * hidden_dim, generator=gen)
+            if W_o is None:
+                W_o = torch.randn(hidden_dim, hidden_dim, generator=gen)
+            y_ref = reference_attention(x, W_qkv, W_o, num_heads, head_dim)
+            df_fp32, tiler_fp32, systolic_fp32 = self._get_fp32_functional_components()
+            y_sim = run_attention_functional(
+                x, W_qkv, W_o, num_heads, head_dim,
+                df_fp32, tiler_fp32, systolic_fp32,
+            )
+            # Ref = one-shot, sim = tile accumulate → report shows tiling+acc error.
+            correctness_report = compute_diff_report(
+                y_sim, y_ref, AccumulatorType.FP32, rtol=1e-2, atol=0.25, max_sample=10
+            )
+            correctness_pass = correctness_report["match"]
+            if not correctness_pass:
+                raise AssertionError(
+                    "Attention functionality check failed.\n"
+                    f"{format_diff_report(correctness_report)}"
+                )
 
         dram_addr = 0
         bpe = self.dtype.num_bytes
@@ -242,7 +377,14 @@ class NPUSimulator:
             weight_base=dram_addr,
         )
 
-        return self.stats.summary()
+        summary = self.stats.summary()
+        if check_correctness and correctness_report is not None:
+            summary["correctness"] = "pass" if correctness_pass else "fail"
+            summary["correctness_message"] = (
+                "Output matches reference (attention)." if correctness_pass else "Mismatch."
+            )
+            summary["correctness_report"] = correctness_report
+        return summary
 
     def run_transformer_layer(
         self,
@@ -251,6 +393,8 @@ class NPUSimulator:
         num_heads: int,
         ffn_dim: int | None = None,
         head_dim: int | None = None,
+        check_correctness: bool = False,
+        seed: int | None = 42,
     ) -> dict:
         """Simulate a full transformer layer.
 
@@ -261,11 +405,63 @@ class NPUSimulator:
         4. LayerNorm
         5. FFN (2x MatMul with GELU)
         6. Residual Add
+
+        If check_correctness is True, runs reference and functional transformer layer
+        with random weights (seed) and compares outputs.
+
+        Precision (cycle simulation, config default INT8):
+        - Activations / weights in DRAM/SRAM: config.dtype (e.g. INT8).
+        - All MatMuls (QKV, attn scores, attn out, output proj, ffn_up, ffn_down):
+          input A/B in dtype (INT8), internal multiply in float, output cast to
+          config.dtype.accumulator_dtype (INT32). Stored output tile = INT32.
+        - LayerNorm: input/output buffer size = dtype; gamma/beta params = FP32 (4B each).
+        - Softmax / GELU / Residual add: memory and cycles modeled with dtype for
+          element size (no explicit type change in model).
+
+        Precision (functional check only):
+        - Entire layer in FP32: x, all weights, LN, attention, FFN matmuls, GELU, adds.
+        - Uses FP32 systolic/tiler/dataflow so tile matmuls and ref both stay float.
         """
         if ffn_dim is None:
             ffn_dim = 4 * hidden_dim
         if head_dim is None:
             head_dim = hidden_dim // num_heads
+
+        correctness_pass: bool | None = None
+        correctness_report: dict | None = None
+        if check_correctness:
+            gen = torch.Generator()
+            if seed is not None:
+                gen.manual_seed(seed)
+            x = torch.randn(seq_len, hidden_dim, generator=gen)
+            W_ln1_g = torch.ones(hidden_dim)
+            W_ln1_b = torch.zeros(hidden_dim)
+            W_qkv = torch.randn(hidden_dim, 3 * hidden_dim, generator=gen)
+            W_o = torch.randn(hidden_dim, hidden_dim, generator=gen)
+            W_ln2_g = torch.ones(hidden_dim)
+            W_ln2_b = torch.zeros(hidden_dim)
+            W_ffn_up = torch.randn(hidden_dim, ffn_dim, generator=gen)
+            W_ffn_down = torch.randn(ffn_dim, hidden_dim, generator=gen)
+            y_ref = reference_transformer_layer(
+                x, W_ln1_g, W_ln1_b, W_qkv, W_o, W_ln2_g, W_ln2_b,
+                W_ffn_up, W_ffn_down, num_heads, head_dim, ffn_dim,
+            )
+            df_fp32, tiler_fp32, systolic_fp32 = self._get_fp32_functional_components()
+            y_sim = run_transformer_layer_functional(
+                x, W_ln1_g, W_ln1_b, W_qkv, W_o, W_ln2_g, W_ln2_b,
+                W_ffn_up, W_ffn_down, num_heads, head_dim, ffn_dim,
+                df_fp32, tiler_fp32, systolic_fp32,
+            )
+            # Ref = one-shot, sim = tile accumulate → report shows tiling+acc error.
+            correctness_report = compute_diff_report(
+                y_sim, y_ref, AccumulatorType.FP32, rtol=1e-2, atol=0.25, max_sample=10
+            )
+            correctness_pass = correctness_report["match"]
+            if not correctness_pass:
+                raise AssertionError(
+                    "Transformer layer functionality check failed.\n"
+                    f"{format_diff_report(correctness_report)}"
+                )
 
         # 1. LayerNorm
         ln1 = SpecialFunctionUnit.layernorm_cycles(seq_len, hidden_dim, self.dtype)
@@ -299,13 +495,41 @@ class NPUSimulator:
         self.engine.current_cycle += res2.cycles
 
         self.stats.total_cycles = self.engine.current_cycle
-        return self.stats.summary()
+        summary = self.stats.summary()
+        if check_correctness and correctness_report is not None:
+            summary["correctness"] = "pass" if correctness_pass else "fail"
+            summary["correctness_message"] = (
+                "Output matches reference (transformer layer)." if correctness_pass else "Mismatch."
+            )
+            summary["correctness_report"] = correctness_report
+        return summary
+
+    def _get_fp32_functional_components(
+        self,
+    ) -> tuple[WSDataflow, Tiler, SystolicArray]:
+        """Build FP32 dataflow/tiler/systolic for correctness check (float compare)."""
+        dtype_fp32 = DataTypeConfig(compute_dtype="FP32", accumulator_dtype="FP32")
+        systolic_fp32 = SystolicArray(
+            rows=self.config.systolic.rows,
+            cols=self.config.systolic.cols,
+            dtype=DataType.FP32,
+            acc_dtype=AccumulatorType.FP32,
+        )
+        tiler_fp32 = Tiler(
+            self.config.sram,
+            self.config.systolic,
+            dtype_fp32,
+            double_buffer=self.config.double_buffer.enabled,
+        )
+        dataflow_fp32 = WSDataflow(tiler_fp32)
+        return dataflow_fp32, tiler_fp32, systolic_fp32
 
     def _reset_for_layer(self) -> None:
         """Reset SRAM bank tracking between layers (new data layout)."""
         self.sram.reset_busy()
         self.double_buf.reset()
-        self.dram._bus_free_cycle = self.engine.current_cycle
+        if hasattr(self.dram, "_bus_free_cycle"):
+            self.dram._bus_free_cycle = self.engine.current_cycle
 
     def reset(self) -> None:
         """Full reset of the simulator."""

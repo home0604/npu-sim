@@ -83,6 +83,18 @@ class SimulationEngine:
             if event.callback:
                 event.callback(event)
 
+    def run_one_event(self) -> bool:
+        """Pop and process exactly one event. Returns False if queue empty, True otherwise."""
+        if self.event_queue.empty:
+            return False
+        event = self.event_queue.pop()
+        self.current_cycle = event.cycle
+        for handler in self._handlers.get(event.event_type, []):
+            handler(event)
+        if event.callback:
+            event.callback(event)
+        return True
+
     def run_until(self, target_cycle: int) -> None:
         """Run simulation until a specific cycle."""
         while not self.event_queue.empty:

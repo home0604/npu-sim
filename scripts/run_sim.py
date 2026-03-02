@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from npu_sim.core.config import load_config
+from npu_sim.sim.functional_check import format_diff_report
 from npu_sim.sim.simulator import NPUSimulator
 
 
@@ -29,34 +30,64 @@ def main():
     parser.add_argument("--hidden-dim", type=int, default=768, help="Hidden dimension")
     parser.add_argument("--num-heads", type=int, default=12, help="Number of attention heads")
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
+    parser.add_argument(
+        "--check-correctness",
+        action="store_true",
+        help="Run functionality check: compare tile-by-tile output to reference (matmul/attention/transformer)",
+    )
+    parser.add_argument(
+        "--use-dramsim3",
+        action="store_true",
+        help="Use DRAMSim3 for DRAM (requires build via scripts/setup_dramsim3.sh)",
+    )
 
     args = parser.parse_args()
 
     config = load_config(args.config)
+    if args.use_dramsim3:
+        config.dram.use_dramsim3 = True
     sim = NPUSimulator(config)
 
+    dram_backend = type(sim.dram).__name__
     print(f"NPU Config: {config.name}")
     print(f"  Array: {config.systolic.rows}x{config.systolic.cols}")
     print(f"  SRAM: {config.sram.total_size_kb}KB, {config.sram.num_banks} banks, {config.sram.port_type}-port")
+    print(f"  DRAM: {dram_backend}")
     print(f"  Dtype: {config.dtype.compute_dtype}")
     print(f"  Double Buffer: {config.double_buffer.enabled}")
     print()
 
     if args.workload == "matmul":
         print(f"Running MatMul: C[{args.M},{args.N}] = A[{args.M},{args.K}] x B[{args.K},{args.N}]")
-        result = sim.run_matmul(args.M, args.N, args.K)
+        if args.check_correctness:
+            print("  (functionality check enabled: output will be compared to reference)")
+        result = sim.run_matmul(args.M, args.N, args.K, check_correctness=args.check_correctness)
     elif args.workload == "attention":
         print(f"Running Attention: seq_len={args.seq_len}, hidden={args.hidden_dim}, heads={args.num_heads}")
-        result = sim.run_attention(args.seq_len, args.hidden_dim, args.num_heads)
+        if args.check_correctness:
+            print("  (functionality check enabled: output will be compared to reference)")
+        result = sim.run_attention(
+            args.seq_len, args.hidden_dim, args.num_heads,
+            check_correctness=args.check_correctness,
+        )
     elif args.workload == "transformer":
         print(f"Running Transformer Layer: seq_len={args.seq_len}, hidden={args.hidden_dim}, heads={args.num_heads}")
-        result = sim.run_transformer_layer(args.seq_len, args.hidden_dim, args.num_heads)
+        if args.check_correctness:
+            print("  (functionality check enabled: output will be compared to reference)")
+        result = sim.run_transformer_layer(
+            args.seq_len, args.hidden_dim, args.num_heads,
+            check_correctness=args.check_correctness,
+        )
 
     print()
     if args.json:
         print(json.dumps(result, indent=2))
     else:
         sim.stats.print_summary()
+        if args.check_correctness and "correctness" in result:
+            print(f"  Correctness: {result['correctness']} - {result.get('correctness_message', '')}")
+            if "correctness_report" in result:
+                print(format_diff_report(result["correctness_report"]))
 
 
 if __name__ == "__main__":
