@@ -46,6 +46,16 @@ class TileStats:
 
 
 @dataclass
+class GPTVQStats:
+    total_dequant_cycles: int = 0
+    total_vectors_dequantized: int = 0
+    codebook_load_bytes: int = 0
+    index_load_bytes: int = 0
+    scale_load_bytes: int = 0
+    compression_ratio: float = 0.0
+
+
+@dataclass
 class LayerStats:
     name: str = ""
     op_type: str = ""
@@ -65,6 +75,7 @@ class SimStats:
         self.compute = ComputeStats()
         self.memory = MemoryStats()
         self.tile = TileStats()
+        self.gptvq = GPTVQStats()
         self.layer_stats: list[LayerStats] = []
         self._timeline: list[dict] = []
 
@@ -91,7 +102,7 @@ class SimStats:
         return actual_bw  # return raw BW, caller can compare to peak
 
     def summary(self) -> dict:
-        return {
+        result = {
             "total_cycles": self.total_cycles,
             "compute_utilization": f"{self.compute_utilization:.2%}",
             "compute": {
@@ -116,6 +127,16 @@ class SimStats:
                 "total_tiles": self.tile.total_tiles,
             },
         }
+        if self.gptvq.total_dequant_cycles > 0 or self.gptvq.total_vectors_dequantized > 0:
+            result["gptvq"] = {
+                "total_dequant_cycles": self.gptvq.total_dequant_cycles,
+                "total_vectors_dequantized": self.gptvq.total_vectors_dequantized,
+                "codebook_load_bytes": self.gptvq.codebook_load_bytes,
+                "index_load_bytes": self.gptvq.index_load_bytes,
+                "scale_load_bytes": self.gptvq.scale_load_bytes,
+                "compression_ratio": self.gptvq.compression_ratio,
+            }
+        return result
 
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.summary(), indent=indent)
@@ -137,4 +158,13 @@ class SimStats:
         print(f"  DB Stall Cycles:       {s['memory']['double_buffer_stall_cycles']:,}")
         if s["memory"]["double_buffer_misses"] > 0 and s["memory"]["double_buffer_hits"] == 0:
             print("  (DB 0 hits: prefetch slower than compute → memory bound)")
+        if "gptvq" in s:
+            g = s["gptvq"]
+            print(f"  --- GPTVQ ---")
+            print(f"  Dequant Cycles:        {g['total_dequant_cycles']:,}")
+            print(f"  Vectors Dequantized:   {g['total_vectors_dequantized']:,}")
+            print(f"  Codebook Load:         {g['codebook_load_bytes']:,} bytes")
+            print(f"  Index Load:            {g['index_load_bytes']:,} bytes")
+            print(f"  Scale Load:            {g['scale_load_bytes']:,} bytes")
+            print(f"  Compression Ratio:     {g['compression_ratio']:.2f}x")
         print("=" * 60)

@@ -36,6 +36,13 @@ class EventType(Enum):
     LAYER_START = auto()
     LAYER_DONE = auto()
 
+    # GPTVQ events
+    DEQUANT_START = auto()
+    DEQUANT_DONE = auto()
+    CODEBOOK_LOAD_COMPLETE = auto()
+    INDEX_LOAD_COMPLETE = auto()
+    SCALE_LOAD_COMPLETE = auto()
+
 
 @dataclass(order=True)
 class Event:

@@ -40,12 +40,34 @@ def main():
         action="store_true",
         help="Use DRAMSim3 for DRAM (requires build via scripts/setup_dramsim3.sh)",
     )
+    parser.add_argument(
+        "--gptvq",
+        action="store_true",
+        help="Enable GPTVQ mode (codebook + index → dequantized weight, OS dataflow)",
+    )
+    parser.add_argument("--codebook-size", type=int, default=None, help="GPTVQ codebook size R (default: 16)")
+    parser.add_argument("--vector-dim", type=int, default=None, help="GPTVQ vector dimension d (default: 2)")
+    parser.add_argument(
+        "--use-scaling",
+        action="store_true",
+        help="Enable GPTVQ per-group scaling (s, z)",
+    )
 
     args = parser.parse_args()
 
     config = load_config(args.config)
     if args.use_dramsim3:
         config.dram.use_dramsim3 = True
+    if args.gptvq:
+        config.gptvq.enabled = True
+    if args.codebook_size is not None:
+        config.gptvq.codebook_size = args.codebook_size
+        import math
+        config.gptvq.index_bits = int(math.ceil(math.log2(args.codebook_size)))
+    if args.vector_dim is not None:
+        config.gptvq.vector_dim = args.vector_dim
+    if args.use_scaling:
+        config.gptvq.use_scaling = True
     sim = NPUSimulator(config)
 
     dram_backend = type(sim.dram).__name__
@@ -55,6 +77,9 @@ def main():
     print(f"  DRAM: {dram_backend}")
     print(f"  Dtype: {config.dtype.compute_dtype}")
     print(f"  Double Buffer: {config.double_buffer.enabled}")
+    if config.gptvq.enabled:
+        print(f"  GPTVQ: enabled (R={config.gptvq.codebook_size}, d={config.gptvq.vector_dim}, "
+              f"{config.gptvq.index_bits}-bit index, scaling={'on' if config.gptvq.use_scaling else 'off'})")
     print()
 
     if args.workload == "matmul":

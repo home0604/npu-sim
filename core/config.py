@@ -38,6 +38,10 @@ class SRAMConfig:
     weight_buffer_fraction: float = 0.4
     activation_buffer_fraction: float = 0.3
     output_buffer_fraction: float = 0.3
+    # GPTVQ buffer fractions (used when gptvq.enabled is True)
+    codebook_buffer_fraction: float = 0.05
+    index_buffer_fraction: float = 0.20
+    scale_buffer_fraction: float = 0.05
 
 
 @dataclass
@@ -55,6 +59,44 @@ class DoubleBufferConfig:
 
 
 @dataclass
+class GPTVQConfig:
+    """GPTVQ (GPT Vector Quantization) configuration.
+
+    Basic mode: codebook + weight index → dequantized weight.
+    Optional scaling: s * codebook[idx] + z per vector group.
+    """
+
+    enabled: bool = False
+    codebook_size: int = 16  # R: number of centroids
+    vector_dim: int = 2  # d: dimension of each codebook vector
+    index_bits: int = 4  # bits per index (log2(codebook_size))
+    num_codebooks: int = 1  # number of codebooks (1 for standard VQ)
+    use_scaling: bool = False  # enable per-group scaling (s, z)
+    scale_dtype: str = "FP16"  # dtype for scaling factors s
+    zero_point_dtype: str = "FP16"  # dtype for zero points z
+    codebook_dtype: str = "FP16"  # dtype for codebook entries
+    dequant_pipeline_stages: int = 3  # pipeline depth of dequant unit
+    dequant_throughput: int = 1  # vectors dequantized per cycle (pipelined)
+
+    @property
+    def codebook_entry_bytes(self) -> int:
+        return {"FP16": 2, "BF16": 2, "FP32": 4, "INT8": 1}[self.codebook_dtype]
+
+    @property
+    def scale_bytes(self) -> int:
+        return {"FP16": 2, "BF16": 2, "FP32": 4, "INT8": 1}[self.scale_dtype]
+
+    @property
+    def zero_point_bytes(self) -> int:
+        return {"FP16": 2, "BF16": 2, "FP32": 4, "INT8": 1}[self.zero_point_dtype]
+
+    @property
+    def index_elem_bytes(self) -> int:
+        """Bytes per index element (ceil(index_bits / 8))."""
+        return (self.index_bits + 7) // 8
+
+
+@dataclass
 class NPUConfig:
     name: str = "NPU-Sim"
     systolic: SystolicArrayConfig = field(default_factory=SystolicArrayConfig)
@@ -62,6 +104,7 @@ class NPUConfig:
     sram: SRAMConfig = field(default_factory=SRAMConfig)
     dram: DRAMConfig = field(default_factory=DRAMConfig)
     double_buffer: DoubleBufferConfig = field(default_factory=DoubleBufferConfig)
+    gptvq: GPTVQConfig = field(default_factory=GPTVQConfig)
 
 
 def _dict_to_dataclass(cls, data: dict):

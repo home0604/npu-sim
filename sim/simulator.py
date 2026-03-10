@@ -4,12 +4,16 @@ from pathlib import Path
 
 import torch
 
+from ..compute.dequant_unit import DequantizationUnit
 from ..compute.special_functions import SpecialFunctionUnit
-from ..compute.systolic_array import SystolicArray
+from ..compute.systolic_array import OSSystolicArray, SystolicArray
 from ..core.clock import SimulationEngine
 from ..core.config import DataTypeConfig, NPUConfig, load_config
 from ..core.datatypes import AccumulatorType, DataType
 from ..core.stats import LayerStats, SimStats
+from ..dataflow.gptvq_scheduler import GPTVQScheduler
+from ..dataflow.gptvq_tiler import GPTVQTiler
+from ..dataflow.os_dataflow import OSDataflow
 from ..dataflow.scheduler import TileScheduler
 from ..dataflow.tiler import Tiler
 from ..dataflow.ws_dataflow import WSDataflow
@@ -21,7 +25,7 @@ from ..memory.dram_interface import (
 from ..memory.double_buffer import DoubleBufferController
 from ..memory.memory_controller import MemoryController
 from ..memory.sram import BankedSRAM, PortType
-from ..memory.sram_buffers import SRAMBuffer, create_buffer_partitions
+from ..memory.sram_buffers import SRAMBuffer, create_buffer_partitions, create_gptvq_buffer_partitions
 from .functional_check import (
     compare_outputs,
     compute_diff_report,
@@ -30,6 +34,7 @@ from .functional_check import (
     reference_matmul,
     reference_transformer_layer,
     run_attention_functional,
+    run_gptvq_schedule_functional,
     run_schedule_functional,
     run_transformer_layer_functional,
 )
@@ -146,6 +151,11 @@ class NPUSimulator:
             clock_freq_mhz=config.systolic.clock_freq_mhz,
         )
 
+        # GPTVQ components (initialized only when enabled)
+        self.gptvq_enabled = getattr(config.gptvq, "enabled", False)
+        if self.gptvq_enabled:
+            self._init_gptvq()
+
     def _create_scheduler(
         self,
         weight_base_dram: int = 0,
@@ -162,6 +172,72 @@ class NPUSimulator:
             output_buf=self.buffers["output"][0],
             stats=self.stats,
             weight_base_dram=weight_base_dram,
+            act_base_dram=act_base_dram,
+            output_base_dram=output_base_dram,
+        )
+
+    def _init_gptvq(self) -> None:
+        """Initialize GPTVQ-specific components."""
+        cfg = self.config
+
+        # OS Systolic Array
+        self.os_systolic = OSSystolicArray(
+            rows=cfg.systolic.rows,
+            cols=cfg.systolic.cols,
+            dtype=self.dtype,
+            acc_dtype=self.acc_dtype,
+        )
+
+        # Dequantization unit
+        self.dequant_unit = DequantizationUnit(cfg.gptvq)
+
+        # GPTVQ buffer partitions
+        self.gptvq_buffers = create_gptvq_buffer_partitions(
+            self.sram,
+            codebook_fraction=cfg.sram.codebook_buffer_fraction,
+            index_fraction=cfg.sram.index_buffer_fraction,
+            scale_fraction=cfg.sram.scale_buffer_fraction,
+            activation_fraction=cfg.sram.activation_buffer_fraction,
+            output_fraction=cfg.sram.output_buffer_fraction,
+            double_buffer=cfg.double_buffer.enabled,
+            use_scaling=cfg.gptvq.use_scaling,
+        )
+
+        # GPTVQ tiler
+        self.gptvq_tiler = GPTVQTiler(
+            cfg.sram,
+            cfg.systolic,
+            cfg.dtype,
+            cfg.gptvq,
+            double_buffer=cfg.double_buffer.enabled,
+        )
+
+        # OS dataflow
+        self.os_dataflow = OSDataflow(self.gptvq_tiler, cfg.gptvq)
+
+    def _create_gptvq_scheduler(
+        self,
+        codebook_base_dram: int = 0,
+        index_base_dram: int = 0,
+        scale_base_dram: int = 0,
+        act_base_dram: int = 0,
+        output_base_dram: int = 0,
+    ) -> GPTVQScheduler:
+        return GPTVQScheduler(
+            engine=self.engine,
+            systolic=self.os_systolic,
+            dequant_unit=self.dequant_unit,
+            mem_ctrl=self.mem_ctrl,
+            double_buf=self.double_buf,
+            codebook_bufs=self.gptvq_buffers["codebook"],
+            index_bufs=self.gptvq_buffers["index"],
+            scale_bufs=self.gptvq_buffers["scale"],
+            act_bufs=self.gptvq_buffers["activation"],
+            output_buf=self.gptvq_buffers["output"][0],
+            stats=self.stats,
+            codebook_base_dram=codebook_base_dram,
+            index_base_dram=index_base_dram,
+            scale_base_dram=scale_base_dram,
             act_base_dram=act_base_dram,
             output_base_dram=output_base_dram,
         )
@@ -189,6 +265,14 @@ class NPUSimulator:
         Returns summary statistics dict; when check_correctness is True, includes
         "correctness": "pass" | "fail" and "correctness_message".
         """
+        if self.gptvq_enabled:
+            return self._run_matmul_gptvq(
+                M, N, K, name=name,
+                act_base=act_base, output_base=output_base,
+                check_correctness=check_correctness,
+                activation=activation, seed=seed,
+            )
+
         # Generate tile schedule
         tile_config, schedule = self.dataflow.generate_schedule(
             M, N, K,
@@ -257,6 +341,149 @@ class NPUSimulator:
             LayerStats(
                 name=name,
                 op_type="matmul",
+                cycles=end_cycle,
+                mac_ops=M * N * K,
+                dram_bytes=self.stats.memory.dram_read_bytes + self.stats.memory.dram_write_bytes,
+            )
+        )
+
+        summary = self.stats.summary()
+        if check_correctness and correctness_pass is not None:
+            summary["correctness"] = "pass" if correctness_pass else "fail"
+            summary["correctness_message"] = correctness_message or ""
+            if correctness_report is not None:
+                summary["correctness_report"] = correctness_report
+        return summary
+
+    def _run_matmul_gptvq(
+        self,
+        M: int,
+        N: int,
+        K: int,
+        name: str = "MatMul_GPTVQ",
+        codebook_base: int = 0,
+        index_base: int = 0,
+        scale_base: int = 0,
+        act_base: int = 0,
+        output_base: int = 0,
+        check_correctness: bool = False,
+        codebook: torch.Tensor | None = None,
+        indices: torch.Tensor | None = None,
+        activation: torch.Tensor | None = None,
+        scales: torch.Tensor | None = None,
+        zero_points: torch.Tensor | None = None,
+        seed: int | None = 42,
+    ) -> dict:
+        """Simulate a GPTVQ MatMul: C[M,N] = dequant(codebook, indices, scales)[M,K] * A[K,N].
+
+        Uses Output-Stationary dataflow with dequantization.
+        """
+        import math
+
+        gptvq_cfg = self.config.gptvq
+        d = gptvq_cfg.vector_dim
+        R = gptvq_cfg.codebook_size
+
+        # Generate GPTVQ tile schedule
+        tile_config, schedule = self.os_dataflow.generate_schedule(
+            M, N, K,
+            codebook_base_addr=codebook_base,
+            index_base_addr=index_base,
+            scale_base_addr=scale_base,
+            activation_base_addr=act_base,
+            output_base_addr=output_base,
+        )
+
+        # Functionality check
+        correctness_pass: bool | None = None
+        correctness_message: str | None = None
+        correctness_report: dict | None = None
+        if check_correctness:
+            gen = torch.Generator()
+            if seed is not None:
+                gen.manual_seed(seed)
+            K_groups = math.ceil(K / d)
+            if codebook is None:
+                codebook = torch.randn(R, d, generator=gen).to(torch.float32)
+            if indices is None:
+                indices = torch.randint(0, R, (M, K_groups), generator=gen)
+            if activation is None:
+                activation = torch.randn(K, N, generator=gen).to(
+                    self.dtype.torch_dtype if self.dtype != DataType.INT8 else torch.float32
+                )
+            if gptvq_cfg.use_scaling and scales is None:
+                scales = torch.randn(K_groups, generator=gen).abs() + 0.1
+            if gptvq_cfg.use_scaling and zero_points is None:
+                zero_points = torch.randn(K_groups, generator=gen) * 0.01
+
+            # Dequantize full weight for reference
+            dequant_full = self.dequant_unit.dequantize(
+                indices, codebook, M, K,
+                scales=scales, zero_points=zero_points,
+            )
+            W_deq = dequant_full.output.float()
+            C_ref = reference_matmul(
+                W_deq.to(self.acc_dtype.torch_dtype),
+                activation.float().to(self.acc_dtype.torch_dtype),
+                self.acc_dtype,
+            )
+
+            # Run tile-by-tile functional check
+            C_sim = run_gptvq_schedule_functional(
+                schedule, tile_config, codebook, indices, activation,
+                self.dequant_unit, self.os_systolic, M, N, K,
+                scales=scales, zero_points=zero_points,
+            )
+
+            rtol, atol = 1e-3, 1e-2
+            correctness_pass, correctness_message = compare_outputs(
+                C_sim, C_ref, self.acc_dtype, rtol=rtol, atol=atol
+            )
+            correctness_report = compute_diff_report(
+                C_sim, C_ref, self.acc_dtype, rtol=rtol, atol=atol, max_sample=10
+            )
+            if not correctness_pass:
+                raise AssertionError(
+                    f"GPTVQ functionality check failed: {correctness_message}\n"
+                    f"{format_diff_report(correctness_report)}"
+                )
+
+        # Update tile stats
+        self.stats.tile.tile_m = tile_config.tile_m
+        self.stats.tile.tile_n = tile_config.tile_n
+        self.stats.tile.tile_k = tile_config.tile_k
+        self.stats.tile.num_m_tiles = tile_config.num_m_tiles
+        self.stats.tile.num_n_tiles = tile_config.num_n_tiles
+        self.stats.tile.num_k_tiles = tile_config.num_k_tiles
+        self.stats.tile.total_tiles = tile_config.total_tiles
+
+        # Execute GPTVQ schedule
+        scheduler = self._create_gptvq_scheduler(
+            codebook_base, index_base, scale_base, act_base, output_base
+        )
+        end_cycle = scheduler.execute_schedule(schedule, self.engine.current_cycle)
+        self.engine.current_cycle = end_cycle
+        self.stats.total_cycles = end_cycle
+
+        # Compute compression ratio (theoretical: original vs compressed data size)
+        import math as _math
+
+        original_weight_bytes = M * K * self.dtype.num_bytes
+        K_groups = _math.ceil(K / d)
+        compressed_bytes = (
+            R * d * gptvq_cfg.codebook_entry_bytes  # codebook (shared)
+            + M * K_groups * gptvq_cfg.index_elem_bytes  # indices
+        )
+        if gptvq_cfg.use_scaling:
+            compressed_bytes += K_groups * (gptvq_cfg.scale_bytes + gptvq_cfg.zero_point_bytes)
+        if compressed_bytes > 0:
+            self.stats.gptvq.compression_ratio = original_weight_bytes / compressed_bytes
+
+        # Record layer stats
+        self.stats.layer_stats.append(
+            LayerStats(
+                name=name,
+                op_type="matmul_gptvq",
                 cycles=end_cycle,
                 mac_ops=M * N * K,
                 dram_bytes=self.stats.memory.dram_read_bytes + self.stats.memory.dram_write_bytes,

@@ -152,3 +152,60 @@ class SystolicArray:
         """Peak throughput in TOPS (Tera Operations Per Second)."""
         ops_per_cycle = self.rows * self.cols * 2  # MAC = 2 ops
         return ops_per_cycle * 1e6 / 1e12  # assuming 1GHz default
+
+
+class OSSystolicArray(SystolicArray):
+    """Output-Stationary Systolic Array model.
+
+    In OS dataflow:
+    - Output partial sums stay stationary in PEs across all K-tiles
+    - Weights and activations both flow through the array per K-tile
+    - No separate weight pre-load phase (weights stream through pipeline)
+
+    Cycle formula per (m, n) output tile across all K-tiles:
+        fill + K_total + drain = (eff_m + eff_n - 1) + K + (eff_m + eff_n - 1)
+
+    Same pipeline formula as WS, but differs in memory access patterns:
+    - Both weights and activations are loaded for every K-tile
+    - Output is stored only once after all K-tiles complete
+    """
+
+    def analytical_cycles(
+        self, tile_m: int, tile_n: int, tile_k: int, include_weight_load: bool = False
+    ) -> CycleBreakdown:
+        """Compute analytical cycle count for an OS tile.
+
+        Same fill + compute + drain formula. include_weight_load is ignored
+        for OS (no separate weight pre-load; weights stream through pipeline).
+        """
+        M, N = self.rows, self.cols
+
+        m_passes = (tile_m + M - 1) // M
+        n_passes = (tile_n + N - 1) // N
+
+        total_fill = 0
+        total_compute = 0
+        total_drain = 0
+
+        for mp in range(m_passes):
+            eff_m = min(M, tile_m - mp * M)
+            for np_ in range(n_passes):
+                eff_n = min(N, tile_n - np_ * N)
+
+                fill = eff_m + eff_n - 1
+                compute = tile_k
+                drain = eff_m + eff_n - 1
+
+                total_fill += fill
+                total_compute += compute
+                total_drain += drain
+
+        total = total_fill + total_compute + total_drain
+
+        return CycleBreakdown(
+            pipeline_fill_cycles=total_fill,
+            compute_cycles=total_compute,
+            pipeline_drain_cycles=total_drain,
+            total_cycles=total,
+            weight_load_cycles=0,  # OS has no separate weight load phase
+        )
