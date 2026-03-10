@@ -12,7 +12,7 @@ from ..core.datatypes import AccumulatorType, DataType
 from ..core.stats import LayerStats, SimStats
 from ..dataflow.scheduler import TileScheduler
 from ..dataflow.tiler import Tiler
-from ..dataflow.ws_dataflow import WSDataflow
+from ..dataflow.stationary import StationaryDataflow
 from ..memory.dram_interface import (
     DRAMSim3Adapter,
     DRAMSim3Interface,
@@ -43,7 +43,7 @@ class NPUSimulator:
     - SystolicArray (PyTorch compute + analytical cycles)
     - BankedSRAM (with banking conflict modeling)
     - DRAM (SimpleDRAMModel or DRAMSim3)
-    - Tiler + WSDataflow (tile schedule generation)
+    - Tiler + StationaryDataflow (tile schedule generation)
     - TileScheduler + DoubleBufferController (execution with overlap)
     """
 
@@ -134,7 +134,7 @@ class NPUSimulator:
         )
 
         # Dataflow
-        self.dataflow = WSDataflow(self.tiler)
+        self.dataflow = StationaryDataflow(self.tiler, dataflow=config.systolic.dataflow)
 
         # Double buffer controller
         self.double_buf = DoubleBufferController()
@@ -164,6 +164,7 @@ class NPUSimulator:
             weight_base_dram=weight_base_dram,
             act_base_dram=act_base_dram,
             output_base_dram=output_base_dram,
+            dataflow=self.config.systolic.dataflow,
         )
 
     def run_matmul(
@@ -190,12 +191,7 @@ class NPUSimulator:
         "correctness": "pass" | "fail" and "correctness_message".
         """
         # Generate tile schedule
-        tile_config, schedule = self.dataflow.generate_schedule(
-            M, N, K,
-            weight_base_addr=weight_base,
-            activation_base_addr=act_base,
-            output_base_addr=output_base,
-        )
+        tile_config, schedule = self.dataflow.generate_schedule(M, N, K)
 
         # Functionality check (before cycle sim): verify mul/accum per data type vs reference
         correctness_pass: bool | None = None
@@ -506,7 +502,7 @@ class NPUSimulator:
 
     def _get_fp32_functional_components(
         self,
-    ) -> tuple[WSDataflow, Tiler, SystolicArray]:
+    ) -> tuple[StationaryDataflow, Tiler, SystolicArray]:
         """Build FP32 dataflow/tiler/systolic for correctness check (float compare)."""
         dtype_fp32 = DataTypeConfig(compute_dtype="FP32", accumulator_dtype="FP32")
         systolic_fp32 = SystolicArray(
@@ -521,7 +517,7 @@ class NPUSimulator:
             dtype_fp32,
             double_buffer=self.config.double_buffer.enabled,
         )
-        dataflow_fp32 = WSDataflow(tiler_fp32)
+        dataflow_fp32 = StationaryDataflow(tiler_fp32, dataflow=self.config.systolic.dataflow)
         return dataflow_fp32, tiler_fp32, systolic_fp32
 
     def _reset_for_layer(self) -> None:

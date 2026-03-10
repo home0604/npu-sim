@@ -4,6 +4,7 @@ systolic:
   rows: 32
   cols: 32
   clock_freq_mhz: 1000
+  dataflow: "OS"
 
 dtype:
   compute_dtype: "FP16"

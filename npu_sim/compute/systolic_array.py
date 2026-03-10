@@ -30,22 +30,21 @@ class TileResult:
 
 
 class SystolicArray:
-    """Weight-Stationary Systolic Array model.
+    """Systolic Array model supporting OS/WS/IS dataflows.
 
     Uses PyTorch for actual computation and analytical formulas for cycle counting.
 
-    Weight Stationary Dataflow:
-    - Weights are pre-loaded into PEs and remain stationary
-    - Activations flow horizontally through the array
-    - Partial sums flow vertically (accumulate down columns)
+    Dataflow mapping (EONSim-style SR/SC/T abstraction):
+    - OS: SR=M, SC=N, T=K  (output stays in PE, accumulate over K)
+    - WS: SR=K, SC=N, T=M  (weight stays in PE, inputs stream through)
+    - IS: SR=K, SC=M, T=N  (input stays in PE, weights stream through)
 
-    For an MxN array computing (tile_M, tile_K) x (tile_K, tile_N):
-    - Pipeline fill:  M + N - 1 cycles (activations reach all PEs)
-    - Computation:    K cycles (one K-element per cycle flows through)
-    - Pipeline drain: M + N - 1 cycles (last results propagate out)
-    - Total:          K + 2*(M + N - 1) cycles per tile
+    For an RxC array with mapped dimensions (SR, SC, T):
+    - Pipeline fill:  eff_sr + eff_sc - 1 cycles
+    - Computation:    T cycles
+    - Pipeline drain: eff_sr + eff_sc - 1 cycles
 
-    When tile dimensions exceed array dimensions, multiple passes are needed.
+    When mapped spatial dimensions exceed array dimensions, multiple passes are needed.
     """
 
     def __init__(
@@ -78,7 +77,7 @@ class SystolicArray:
         if self.acc_dtype == AccumulatorType.INT32:
             output = output.to(torch.int32)
 
-        cycles = self.analytical_cycles(tile_m, tile_n, tile_k)
+        cycles = self.analytical_cycles(tile_m, tile_n, tile_k, dataflow="OS")
 
         return TileResult(
             output=output,
@@ -88,36 +87,52 @@ class SystolicArray:
             cycles=cycles,
         )
 
+    def _map_dataflow(
+        self, tile_m: int, tile_n: int, tile_k: int, dataflow: str
+    ) -> tuple[int, int, int]:
+        """Map (M, N, K) to (SR, SC, T) based on dataflow type."""
+        if dataflow == "WS":
+            return tile_k, tile_n, tile_m
+        elif dataflow == "IS":
+            return tile_k, tile_m, tile_n
+        else:  # OS (default)
+            return tile_m, tile_n, tile_k
+
     def analytical_cycles(
-        self, tile_m: int, tile_n: int, tile_k: int, include_weight_load: bool = False
+        self,
+        tile_m: int,
+        tile_n: int,
+        tile_k: int,
+        include_weight_load: bool = False,
+        dataflow: str = "OS",
     ) -> CycleBreakdown:
         """Compute analytical cycle count for a tile.
 
-        When tile dimensions exceed array dimensions, multiple passes are used.
-        Each pass processes min(M, remaining_m) x min(N, remaining_n).
+        Maps (tile_m, tile_n, tile_k) to spatial rows (SR), spatial cols (SC),
+        and temporal axis (T) based on the dataflow, then applies the unified
+        systolic array formula.
 
-        For K-dimension with WS accumulator registers: consecutive K-tiles
-        don't need extra fill/drain between them (partial sums stay in PEs).
-        So the formula for a single (m_pass, n_pass) with the full K:
-            fill + K + drain = (eff_m + eff_n - 1) + tile_k + (eff_m + eff_n - 1)
+        When mapped spatial dimensions exceed array dimensions, multiple passes
+        are used. Each pass processes min(R, remaining_sr) x min(C, remaining_sc).
         """
-        M, N = self.rows, self.cols
+        R, C = self.rows, self.cols
+        sr, sc, t = self._map_dataflow(tile_m, tile_n, tile_k, dataflow)
 
-        m_passes = (tile_m + M - 1) // M
-        n_passes = (tile_n + N - 1) // N
+        sr_passes = (sr + R - 1) // R
+        sc_passes = (sc + C - 1) // C
 
         total_fill = 0
         total_compute = 0
         total_drain = 0
 
-        for mp in range(m_passes):
-            eff_m = min(M, tile_m - mp * M)
-            for np_ in range(n_passes):
-                eff_n = min(N, tile_n - np_ * N)
+        for sp in range(sr_passes):
+            eff_sr = min(R, sr - sp * R)
+            for cp in range(sc_passes):
+                eff_sc = min(C, sc - cp * C)
 
-                fill = eff_m + eff_n - 1
-                compute = tile_k
-                drain = eff_m + eff_n - 1
+                fill = eff_sr + eff_sc - 1
+                compute = t
+                drain = eff_sr + eff_sc - 1
 
                 total_fill += fill
                 total_compute += compute

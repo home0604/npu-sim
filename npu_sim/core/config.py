@@ -11,6 +11,7 @@ class SystolicArrayConfig:
     rows: int = 32
     cols: int = 32
     clock_freq_mhz: int = 1000
+    dataflow: str = "OS"
 
 
 @dataclass

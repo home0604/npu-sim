@@ -3,18 +3,19 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from npu_sim.core.config import NPUConfig
 from npu_sim.sim.simulator import NPUSimulator
 
 
-def make_simulator(rows=32, cols=32, sram_kb=512, dtype="INT8") -> NPUSimulator:
+def make_simulator(rows=32, cols=32, sram_kb=512, dtype="INT8", dataflow="OS") -> NPUSimulator:
     config = NPUConfig()
     config.systolic.rows = rows
     config.systolic.cols = cols
     config.sram.total_size_kb = sram_kb
     config.dtype.compute_dtype = dtype
+    config.systolic.dataflow = dataflow
     return NPUSimulator(config)
 
 
@@ -157,3 +158,60 @@ def test_different_dtypes():
 
     # INT8 has smaller tiles in bytes -> larger tile_k -> less DRAM traffic
     assert r_int8["memory"]["dram_read_bytes"] <= r_fp16["memory"]["dram_read_bytes"]
+
+
+# --- Multi-dataflow tests ---
+
+def test_matmul_os_dataflow():
+    """OS dataflow MatMul with correctness check."""
+    sim = make_simulator(rows=32, cols=32, sram_kb=512, dataflow="OS")
+    result = sim.run_matmul(M=64, N=64, K=64, check_correctness=True)
+    assert result["correctness"] == "pass"
+    assert result["compute"]["total_mac_ops"] == 64 * 64 * 64
+
+
+def test_matmul_ws_dataflow():
+    """WS dataflow MatMul with correctness check."""
+    sim = make_simulator(rows=32, cols=32, sram_kb=512, dataflow="WS")
+    result = sim.run_matmul(M=64, N=64, K=64, check_correctness=True)
+    assert result["correctness"] == "pass"
+    assert result["compute"]["total_mac_ops"] == 64 * 64 * 64
+
+
+def test_matmul_is_dataflow():
+    """IS dataflow MatMul with correctness check."""
+    sim = make_simulator(rows=32, cols=32, sram_kb=512, dataflow="IS")
+    result = sim.run_matmul(M=64, N=64, K=64, check_correctness=True)
+    assert result["correctness"] == "pass"
+    assert result["compute"]["total_mac_ops"] == 64 * 64 * 64
+
+
+def test_different_dataflows_same_mac_ops():
+    """All dataflows should produce the same total MAC ops for the same MatMul."""
+    M, N, K = 64, 64, 128
+    results = {}
+    for df in ("OS", "WS", "IS"):
+        sim = make_simulator(rows=32, cols=32, sram_kb=512, dataflow=df)
+        results[df] = sim.run_matmul(M=M, N=N, K=K, check_correctness=True)
+        assert results[df]["correctness"] == "pass"
+
+    mac_os = results["OS"]["compute"]["total_mac_ops"]
+    mac_ws = results["WS"]["compute"]["total_mac_ops"]
+    mac_is = results["IS"]["compute"]["total_mac_ops"]
+    assert mac_os == mac_ws == mac_is == M * N * K
+
+
+def test_matmul_ws_multi_tile():
+    """WS dataflow with multiple tiles and correctness check."""
+    sim = make_simulator(rows=16, cols=16, sram_kb=128, dataflow="WS")
+    result = sim.run_matmul(M=128, N=128, K=128, check_correctness=True)
+    assert result["correctness"] == "pass"
+    assert result["compute"]["tiles_processed"] > 1
+
+
+def test_matmul_is_multi_tile():
+    """IS dataflow with multiple tiles and correctness check."""
+    sim = make_simulator(rows=16, cols=16, sram_kb=128, dataflow="IS")
+    result = sim.run_matmul(M=128, N=128, K=128, check_correctness=True)
+    assert result["correctness"] == "pass"
+    assert result["compute"]["tiles_processed"] > 1

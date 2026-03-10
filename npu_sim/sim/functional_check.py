@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import torch
 
 from ..compute.systolic_array import SystolicArray
 from ..core.datatypes import AccumulatorType, DataType
 from ..dataflow.tiler import TileConfig, Tiler
-from ..dataflow.ws_dataflow import TileOp, WSDataflow
+from ..dataflow.stationary import StationaryDataflow, TileOp
 
 
 def run_schedule_functional(
@@ -28,7 +26,7 @@ def run_schedule_functional(
     cycle-accurate scheduler (m, n, k loop, accumulate over k).
 
     Args:
-        schedule: List of TileOp from WSDataflow.generate_schedule.
+        schedule: List of TileOp from StationaryDataflow.generate_schedule.
         tile_config: TileConfig from Tiler.compute_tiles(M, N, K).
         A: Weight matrix [M, K] in compute dtype.
         B: Activation matrix [K, N] in compute dtype.
@@ -107,19 +105,26 @@ def reference_attention(
     return torch.matmul(out, W_o)
 
 
-def _attention_with_matmul_func(
+def run_attention_functional(
     x: torch.Tensor,
     W_qkv: torch.Tensor,
     W_o: torch.Tensor,
     num_heads: int,
     head_dim: int,
-    matmul_func: Any,
+    dataflow: StationaryDataflow,
+    tiler: Tiler,
+    systolic: SystolicArray,
 ) -> torch.Tensor:
-    """Multi-head attention using a pluggable matmul (e.g. tile-based). Out [seq_len, hidden_dim] float."""
+    """Run attention with tile-by-tile matmuls (same schedule as simulator). Output float [seq_len, hidden_dim]."""
     S, D = x.shape
     x = x.float()
     W_qkv = W_qkv.float()
     W_o = W_o.float()
+
+    def matmul_func(M: int, N: int, K: int, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+        tc, schedule = dataflow.generate_schedule(M, N, K)
+        return run_schedule_functional(schedule, tc, A, B, systolic, M, N, K)
+
     qkv = matmul_func(S, 3 * D, D, x, W_qkv).float()
     heads_out = []
     for h in range(num_heads):
@@ -133,45 +138,6 @@ def _attention_with_matmul_func(
         heads_out.append(out_h)
     out = torch.cat(heads_out, dim=-1)
     return matmul_func(S, D, D, out, W_o).float()
-
-
-def reference_attention_tiled(
-    x: torch.Tensor,
-    W_qkv: torch.Tensor,
-    W_o: torch.Tensor,
-    num_heads: int,
-    head_dim: int,
-    dataflow: WSDataflow,
-    tiler: Tiler,
-    systolic: SystolicArray,
-) -> torch.Tensor:
-    """Reference attention with tile-by-tile matmuls (same order as run_attention_functional). Exact match."""
-    def matmul_func(M: int, N: int, K: int, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
-        tc, schedule = dataflow.generate_schedule(M, N, K)
-        return run_schedule_functional(schedule, tc, A, B, systolic, M, N, K)
-
-    return _attention_with_matmul_func(x, W_qkv, W_o, num_heads, head_dim, matmul_func)
-
-
-def run_attention_functional(
-    x: torch.Tensor,
-    W_qkv: torch.Tensor,
-    W_o: torch.Tensor,
-    num_heads: int,
-    head_dim: int,
-    dataflow: WSDataflow,
-    tiler: Tiler,
-    systolic: SystolicArray,
-) -> torch.Tensor:
-    """Run attention with tile-by-tile matmuls (same schedule as simulator). Output float [seq_len, hidden_dim].
-
-    When compared to reference_attention_tiled (same tile order), diff is 0 (exact match).
-    """
-    def matmul_func(M: int, N: int, K: int, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
-        tc, schedule = dataflow.generate_schedule(M, N, K)
-        return run_schedule_functional(schedule, tc, A, B, systolic, M, N, K)
-
-    return _attention_with_matmul_func(x, W_qkv, W_o, num_heads, head_dim, matmul_func)
 
 
 def reference_transformer_layer(
@@ -200,41 +166,6 @@ def reference_transformer_layer(
     return x + ffn
 
 
-def reference_transformer_layer_tiled(
-    x: torch.Tensor,
-    W_ln1_gamma: torch.Tensor,
-    W_ln1_beta: torch.Tensor,
-    W_qkv: torch.Tensor,
-    W_o: torch.Tensor,
-    W_ln2_gamma: torch.Tensor,
-    W_ln2_beta: torch.Tensor,
-    W_ffn_up: torch.Tensor,
-    W_ffn_down: torch.Tensor,
-    num_heads: int,
-    head_dim: int,
-    ffn_dim: int,
-    dataflow: WSDataflow,
-    tiler: Tiler,
-    systolic: SystolicArray,
-) -> torch.Tensor:
-    """Reference transformer layer with tile-based attention and FFN (same order as run_*). Exact match."""
-    x = x.float()
-    ln1 = torch.nn.functional.layer_norm(x, (x.shape[-1],), W_ln1_gamma.float(), W_ln1_beta.float())
-    attn_out = reference_attention_tiled(ln1, W_qkv, W_o, num_heads, head_dim, dataflow, tiler, systolic)
-    x = x + attn_out
-    ln2 = torch.nn.functional.layer_norm(x, (x.shape[-1],), W_ln2_gamma.float(), W_ln2_beta.float())
-    S, D = x.shape
-
-    def matmul_func(M: int, N: int, K: int, A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
-        tc, schedule = dataflow.generate_schedule(M, N, K)
-        return run_schedule_functional(schedule, tc, A, B, systolic, M, N, K)
-
-    ffn = matmul_func(S, ffn_dim, D, ln2, W_ffn_up.float()).float()
-    ffn = torch.nn.functional.gelu(ffn)
-    ffn = matmul_func(S, D, ffn_dim, ffn, W_ffn_down.float()).float()
-    return x + ffn
-
-
 def run_transformer_layer_functional(
     x: torch.Tensor,
     W_ln1_gamma: torch.Tensor,
@@ -248,7 +179,7 @@ def run_transformer_layer_functional(
     num_heads: int,
     head_dim: int,
     ffn_dim: int,
-    dataflow: WSDataflow,
+    dataflow: StationaryDataflow,
     tiler: Tiler,
     systolic: SystolicArray,
 ) -> torch.Tensor:

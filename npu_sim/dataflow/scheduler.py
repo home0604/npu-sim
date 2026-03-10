@@ -9,7 +9,7 @@ from ..core.stats import SimStats
 from ..memory.double_buffer import BufferSlot, DoubleBufferController, SlotState
 from ..memory.memory_controller import MemoryController
 from ..memory.sram_buffers import SRAMBuffer
-from .ws_dataflow import TileOp
+from .stationary import TileOp
 
 if TYPE_CHECKING:
     from ..core.clock import SimulationEngine
@@ -39,6 +39,7 @@ class TileScheduler:
         weight_base_dram: int = 0,
         act_base_dram: int = 0,
         output_base_dram: int = 0,
+        dataflow: str = "OS",
     ):
         self.engine = engine
         self.systolic = systolic
@@ -51,6 +52,7 @@ class TileScheduler:
         self.weight_base_dram = weight_base_dram
         self.act_base_dram = act_base_dram
         self.output_base_dram = output_base_dram
+        self.dataflow = dataflow
 
     def execute_schedule(self, schedule: list[TileOp], start_cycle: int = 0) -> int:
         """Execute a tile schedule and return total completion cycle.
@@ -84,7 +86,8 @@ class TileScheduler:
 
         # Compute first tile
         cycles_info = self.systolic.analytical_cycles(
-            first_tile.tile_m, first_tile.tile_n, first_tile.tile_k
+            first_tile.tile_m, first_tile.tile_n, first_tile.tile_k,
+            dataflow=self.dataflow,
         )
         compute_done_cycle = data_ready_cycle + cycles_info.total_cycles
         self._update_compute_stats(first_tile, cycles_info)
@@ -126,7 +129,8 @@ class TileScheduler:
 
             # Compute current tile
             cycles_info = self.systolic.analytical_cycles(
-                current_tile.tile_m, current_tile.tile_n, current_tile.tile_k
+                current_tile.tile_m, current_tile.tile_n, current_tile.tile_k,
+                dataflow=self.dataflow,
             )
             compute_done = compute_start + cycles_info.total_cycles
             self._update_compute_stats(current_tile, cycles_info)
@@ -154,7 +158,9 @@ class TileScheduler:
             act_done = self._load_activation(tile, 0, cycle)
             data_ready = max(weight_done, act_done)
 
-            cycles_info = self.systolic.analytical_cycles(tile.tile_m, tile.tile_n, tile.tile_k)
+            cycles_info = self.systolic.analytical_cycles(
+                tile.tile_m, tile.tile_n, tile.tile_k, dataflow=self.dataflow,
+            )
             compute_done = data_ready + cycles_info.total_cycles
             self._update_compute_stats(tile, cycles_info)
 
