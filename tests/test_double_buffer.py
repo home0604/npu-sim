@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from npu_sim.memory.double_buffer import BufferSlot, DoubleBufferController, SlotState
+from src.memory.double_buffer import BufferSlot, DoubleBufferController, SlotState
 
 
 def test_initial_state():

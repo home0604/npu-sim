@@ -1,10 +1,10 @@
 All done! Here's a summary of what was built:
 
-## NPU Simulator (`npu_sim/`) - Complete
+## NPU Simulator (`src/`) - Complete
 
 ### Structure (20 files)
 ```
-npu_sim/
+src/
 ├── configs/default.yaml           # 32x32 array, 512KB SRAM, INT8, dual-port
 ├── core/
 │   ├── config.py                  # YAML -> dataclass config loader
@@ -42,9 +42,9 @@ npu_sim/
 
 ### Usage
 ```bash
-python3 npu_sim/scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256
-python3 npu_sim/scripts/run_sim.py --workload attention --seq-len 128 --hidden-dim 768 --num-heads 12
-python3 npu_sim/scripts/run_sim.py --workload transformer --seq-len 128 --hidden-dim 768 --num-heads 12
+python3 scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256
+python3 scripts/run_sim.py --workload attention --seq-len 128 --hidden-dim 768 --num-heads 12
+python3 scripts/run_sim.py --workload transformer --seq-len 128 --hidden-dim 768 --num-heads 12
 ```
 
 ### Using DRAMSim3

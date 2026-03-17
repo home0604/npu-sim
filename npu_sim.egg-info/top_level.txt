@@ -1,8 +1,1 @@
-compute
-configs
-core
-dataflow
-ext
-memory
-sim
-workloads
+src

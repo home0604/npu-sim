@@ -1,0 +1,27 @@
+double_buffer:
+  enabled: true
+dram:
+  bandwidth_gbps: 25.6
+  config_file: ext/DRAMsim3/configs/DDR4_8Gb_x16_2400.ini
+  latency_ns: 50.0
+  output_dir: dramsim3_output
+  use_dramsim3: true
+dtype:
+  accumulator_dtype: FP32
+  compute_dtype: FP16
+name: NPU-Sim-32x32
+sram:
+  activation_buffer_fraction: 0.3
+  bank_width_bytes: 64
+  num_banks: 32
+  output_buffer_fraction: 0.3
+  port_type: dual
+  read_latency_cycles: 1
+  total_size_kb: 512
+  weight_buffer_fraction: 0.4
+  write_latency_cycles: 1
+systolic:
+  clock_freq_mhz: 1000
+  cols: 32
+  dataflow: OS
+  rows: 32

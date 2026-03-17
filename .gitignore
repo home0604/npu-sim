@@ -6,4 +6,6 @@ __pycache__/
 build/
 dist/
 *.so
-.json
+*.json
+dramsim3_output/
+ext/DRAMsim3/

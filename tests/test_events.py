@@ -5,8 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from npu_sim.core.clock import SimulationEngine
-from npu_sim.core.events import Event, EventQueue, EventType
+from src.core.clock import SimulationEngine
+from src.core.events import Event, EventQueue, EventType
 
 
 def test_event_queue_ordering():

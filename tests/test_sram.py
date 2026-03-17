@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from npu_sim.memory.sram import BankedSRAM, PortType
+from src.memory.sram import BankedSRAM, PortType
 
 
 def test_single_port_no_conflict():

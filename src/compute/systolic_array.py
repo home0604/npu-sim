@@ -15,7 +15,7 @@ class CycleBreakdown:
     compute_cycles: int = 0
     pipeline_drain_cycles: int = 0
     total_cycles: int = 0
-    weight_load_cycles: int = 0
+    preload_cycles: int = 0
 
 
 @dataclass
@@ -34,15 +34,24 @@ class SystolicArray:
 
     Uses PyTorch for actual computation and analytical formulas for cycle counting.
 
-    Dataflow mapping (EONSim-style SR/SC/T abstraction):
+    Dataflow mapping (SR/SC/T abstraction):
     - OS: SR=M, SC=N, T=K  (output stays in PE, accumulate over K)
     - WS: SR=K, SC=N, T=M  (weight stays in PE, inputs stream through)
     - IS: SR=K, SC=M, T=N  (input stays in PE, weights stream through)
 
     For an RxC array with mapped dimensions (SR, SC, T):
-    - Pipeline fill:  eff_sr + eff_sc - 1 cycles
-    - Computation:    T cycles
-    - Pipeline drain: eff_sr + eff_sc - 1 cycles
+
+    OS:  total = (SR + SC - 2) + T
+           preload = 0         (no stationary data to preload)
+           fill    = SR + SC - 2  (last PE starts after this many cycles)
+           compute = T            (last PE runs T cycles)
+           drain   = 0            (output already in PE, no propagation needed)
+
+    WS/IS: total = SR + (SR + SC - 2) + T = 2*SR + SC + T - 2
+           preload = SR        (load stationary data into PEs before compute)
+           fill    = SR + SC - 2
+           compute = T
+           drain   = 0
 
     When mapped spatial dimensions exceed array dimensions, multiple passes are needed.
     """
@@ -77,7 +86,7 @@ class SystolicArray:
         if self.acc_dtype == AccumulatorType.INT32:
             output = output.to(torch.int32)
 
-        cycles = self.analytical_cycles(tile_m, tile_n, tile_k, dataflow="OS")
+        cycles = self.analytical_cycles(tile_m, tile_n, tile_k, dataflow="OS")  # functional check only
 
         return TileResult(
             output=output,
@@ -109,8 +118,10 @@ class SystolicArray:
         """Compute analytical cycle count for a tile.
 
         Maps (tile_m, tile_n, tile_k) to spatial rows (SR), spatial cols (SC),
-        and temporal axis (T) based on the dataflow, then applies the unified
-        systolic array formula.
+        and temporal axis (T) based on the dataflow, then applies:
+
+          OS:    preload=0,   fill=SR+SC-2, compute=T, drain=0  → SR+SC+T-2
+          WS/IS: preload=SR,  fill=SR+SC-2, compute=T, drain=0  → 2*SR+SC+T-2
 
         When mapped spatial dimensions exceed array dimensions, multiple passes
         are used. Each pass processes min(R, remaining_sr) x min(C, remaining_sc).
@@ -121,36 +132,33 @@ class SystolicArray:
         sr_passes = (sr + R - 1) // R
         sc_passes = (sc + C - 1) // C
 
+        has_preload = dataflow in ("WS", "IS")
+
+        total_preload = 0
         total_fill = 0
         total_compute = 0
-        total_drain = 0
 
         for sp in range(sr_passes):
             eff_sr = min(R, sr - sp * R)
             for cp in range(sc_passes):
                 eff_sc = min(C, sc - cp * C)
 
-                fill = eff_sr + eff_sc - 1
+                preload = eff_sr if has_preload else 0
+                fill    = eff_sr + eff_sc - 2
                 compute = t
-                drain = eff_sr + eff_sc - 1
 
-                total_fill += fill
+                total_preload += preload
+                total_fill    += fill
                 total_compute += compute
-                total_drain += drain
 
-        total = total_fill + total_compute + total_drain
-
-        weight_load = 0
-        if include_weight_load:
-            weight_load = self.weight_load_cycles(tile_m, tile_k)
-            total += weight_load
+        total = total_preload + total_fill + total_compute
 
         return CycleBreakdown(
             pipeline_fill_cycles=total_fill,
             compute_cycles=total_compute,
-            pipeline_drain_cycles=total_drain,
+            pipeline_drain_cycles=0,
             total_cycles=total,
-            weight_load_cycles=weight_load,
+            preload_cycles=total_preload,
         )
 
     def weight_load_cycles(self, tile_m: int, tile_k: int) -> int:

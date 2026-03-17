@@ -90,7 +90,7 @@ class NPUSimulator:
         # DRAM: SimpleDRAMModel (analytical) or DRAMSim3 (cycle-accurate) via adapter
         if getattr(config.dram, "use_dramsim3", False):
             try:
-                _pkg_root = Path(__file__).resolve().parent.parent
+                _pkg_root = Path(__file__).resolve().parent.parent.parent
                 _config_file = config.dram.config_file
                 if not Path(_config_file).is_absolute():
                     _config_file = str(_pkg_root / _config_file)

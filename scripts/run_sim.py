@@ -6,12 +6,13 @@ import json
 import sys
 from pathlib import Path
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+# Add project root (npu-sim) to path so "from src ..." resolves to src/
+_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_root))
 
-from npu_sim.core.config import load_config
-from npu_sim.sim.functional_check import format_diff_report
-from npu_sim.sim.simulator import NPUSimulator
+from src.core.config import load_config
+from src.sim.functional_check import format_diff_report
+from src.sim.simulator import NPUSimulator
 
 
 def main():
@@ -19,7 +20,7 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default=str(Path(__file__).parent.parent / "configs" / "default.yaml"),
+        default=str(_root / "src" / "configs" / "default.yaml"),
         help="Path to NPU config YAML file",
     )
     parser.add_argument("--workload", type=str, default="matmul", choices=["matmul", "attention", "transformer"])
@@ -40,17 +41,27 @@ def main():
         action="store_true",
         help="Use DRAMSim3 for DRAM (requires build via scripts/setup_dramsim3.sh)",
     )
+    parser.add_argument(
+        "--dataflow",
+        type=str,
+        default=None,
+        choices=["OS", "WS", "IS"],
+        help="Override dataflow from config (OS, WS, or IS). If not set, uses config file.",
+    )
 
     args = parser.parse_args()
 
     config = load_config(args.config)
     if args.use_dramsim3:
         config.dram.use_dramsim3 = True
+    if args.dataflow is not None:
+        config.systolic.dataflow = args.dataflow
     sim = NPUSimulator(config)
 
     dram_backend = type(sim.dram).__name__
     print(f"NPU Config: {config.name}")
     print(f"  Array: {config.systolic.rows}x{config.systolic.cols}")
+    print(f"  Dataflow: {config.systolic.dataflow}")
     print(f"  SRAM: {config.sram.total_size_kb}KB, {config.sram.num_banks} banks, {config.sram.port_type}-port")
     print(f"  DRAM: {dram_backend}")
     print(f"  Dtype: {config.dtype.compute_dtype}")

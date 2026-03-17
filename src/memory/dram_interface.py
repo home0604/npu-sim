@@ -142,8 +142,13 @@ class DRAMSim3Interface:
         self.total_write_bytes = 0
 
         try:
-            # .so is built in package root (npu_sim/); ensure it is on path
-            _pkg_root = Path(__file__).resolve().parent.parent
+            import ctypes
+            # Pre-load libdramsim3.so so dramsim3_py can find it
+            _lib = Path(__file__).resolve().parent.parent.parent / "ext" / "DRAMsim3" / "libdramsim3.so"
+            if _lib.exists():
+                ctypes.CDLL(str(_lib))
+            # dramsim3_py.so is built in project root; ensure it is on path
+            _pkg_root = Path(__file__).resolve().parent.parent.parent
             if str(_pkg_root) not in sys.path:
                 sys.path.insert(0, str(_pkg_root))
             import dramsim3_py  # type: ignore
@@ -219,10 +224,11 @@ class DRAMSim3Interface:
         self._advance_to_cycle(cycle)
 
         for offset in range(0, size_bytes, CACHELINE_SIZE):
-            addr = address + offset
-            while not self._mem_system.AddTransaction(addr, False):
+            addr = (address + offset) & ~(CACHELINE_SIZE - 1)
+            while not self._mem_system.WillAcceptTransaction(addr, False):
                 self._mem_system.ClockTick()
                 self._dramsim_cycle += 1
+            self._mem_system.AddTransaction(addr, False)
             self._pending_reads[addr] = req
 
         self.total_reads += 1
@@ -242,10 +248,11 @@ class DRAMSim3Interface:
         self._advance_to_cycle(cycle)
 
         for offset in range(0, size_bytes, CACHELINE_SIZE):
-            addr = address + offset
-            while not self._mem_system.AddTransaction(addr, True):
+            addr = (address + offset) & ~(CACHELINE_SIZE - 1)
+            while not self._mem_system.WillAcceptTransaction(addr, True):
                 self._mem_system.ClockTick()
                 self._dramsim_cycle += 1
+            self._mem_system.AddTransaction(addr, True)
             self._pending_writes[addr] = req
 
         self.total_writes += 1

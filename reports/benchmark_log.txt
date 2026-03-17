@@ -1,0 +1,482 @@
+=== python3 scripts/run_sim.py --workload matmul --M 32 --N 32 --K 32 --dataflow OS ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: OS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running MatMul: C[32,32] = A[32,32] x B[32,32]
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          4,237
+  Compute Utilization:   0.76%
+  Total MACs:            32,768
+  Tiles Processed:       1
+  Tile Size (M,N,K):     (32, 32, 32)
+  DRAM Read:             4,096 bytes
+  DRAM Write:            4,096 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/0
+  DB Stall Cycles:       0
+============================================================
+
+=== python3 scripts/run_sim.py --workload matmul --M 32 --N 32 --K 32 --dataflow WS ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: WS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running MatMul: C[32,32] = A[32,32] x B[32,32]
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          4,237
+  Compute Utilization:   0.76%
+  Total MACs:            32,768
+  Tiles Processed:       1
+  Tile Size (M,N,K):     (32, 32, 32)
+  DRAM Read:             4,096 bytes
+  DRAM Write:            4,096 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/0
+  DB Stall Cycles:       0
+============================================================
+
+=== python3 scripts/run_sim.py --workload matmul --M 32 --N 32 --K 32 --dataflow IS ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: IS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running MatMul: C[32,32] = A[32,32] x B[32,32]
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          4,237
+  Compute Utilization:   0.76%
+  Total MACs:            32,768
+  Tiles Processed:       1
+  Tile Size (M,N,K):     (32, 32, 32)
+  DRAM Read:             4,096 bytes
+  DRAM Write:            4,096 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/0
+  DB Stall Cycles:       0
+============================================================
+
+=== python3 scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256 --dataflow OS ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: OS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running MatMul: C[256,256] = A[256,256] x B[256,256]
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          578,393
+  Compute Utilization:   2.83%
+  Total MACs:            16,777,216
+  Tiles Processed:       64
+  Tile Size (M,N,K):     (32, 32, 256)
+  DRAM Read:             2,097,152 bytes
+  DRAM Write:            262,144 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/63
+  DB Stall Cycles:       449,980
+  (DB 0 hits: prefetch slower than compute → memory bound)
+============================================================
+
+=== python3 scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256 --dataflow WS ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: WS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running MatMul: C[256,256] = A[256,256] x B[256,256]
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          373,013
+  Compute Utilization:   4.39%
+  Total MACs:            16,777,216
+  Tiles Processed:       64
+  Tile Size (M,N,K):     (256, 32, 32)
+  DRAM Read:             1,179,648 bytes
+  DRAM Write:            262,144 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/63
+  DB Stall Cycles:       313,635
+  (DB 0 hits: prefetch slower than compute → memory bound)
+============================================================
+
+=== python3 scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256 --dataflow IS ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: IS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running MatMul: C[256,256] = A[256,256] x B[256,256]
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          372,275
+  Compute Utilization:   4.40%
+  Total MACs:            16,777,216
+  Tiles Processed:       64
+  Tile Size (M,N,K):     (32, 256, 32)
+  DRAM Read:             1,179,648 bytes
+  DRAM Write:            262,144 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/63
+  DB Stall Cycles:       312,764
+  (DB 0 hits: prefetch slower than compute → memory bound)
+============================================================
+
+=== python3 scripts/run_sim.py --workload matmul --M 64 --N 64 --K 64 --dataflow OS ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: OS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running MatMul: C[64,64] = A[64,64] x B[64,64]
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          24,277
+  Compute Utilization:   1.05%
+  Total MACs:            262,144
+  Tiles Processed:       4
+  Tile Size (M,N,K):     (32, 32, 64)
+  DRAM Read:             32,768 bytes
+  DRAM Write:            16,384 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/3
+  DB Stall Cycles:       13,928
+  (DB 0 hits: prefetch slower than compute → memory bound)
+============================================================
+
+=== python3 scripts/run_sim.py --workload matmul --M 64 --N 64 --K 64 --dataflow WS ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: WS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running MatMul: C[64,64] = A[64,64] x B[64,64]
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          20,070
+  Compute Utilization:   1.28%
+  Total MACs:            262,144
+  Tiles Processed:       4
+  Tile Size (M,N,K):     (64, 32, 32)
+  DRAM Read:             24,576 bytes
+  DRAM Write:            16,384 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/3
+  DB Stall Cycles:       12,553
+  (DB 0 hits: prefetch slower than compute → memory bound)
+============================================================
+
+=== python3 scripts/run_sim.py --workload matmul --M 64 --N 64 --K 256 --dataflow OS ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: OS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running MatMul: C[64,64] = A[64,256] x B[256,64]
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          32,595
+  Compute Utilization:   3.14%
+  Total MACs:            1,048,576
+  Tiles Processed:       4
+  Tile Size (M,N,K):     (32, 32, 256)
+  DRAM Read:             131,072 bytes
+  DRAM Write:            16,384 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/3
+  DB Stall Cycles:       19,984
+  (DB 0 hits: prefetch slower than compute → memory bound)
+============================================================
+
+=== python3 scripts/run_sim.py --workload matmul --M 64 --N 64 --K 256 --dataflow WS ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: WS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running MatMul: C[64,64] = A[64,256] x B[256,64]
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          71,174
+  Compute Utilization:   1.44%
+  Total MACs:            1,048,576
+  Tiles Processed:       16
+  Tile Size (M,N,K):     (64, 32, 32)
+  DRAM Read:             98,304 bytes
+  DRAM Write:            16,384 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/15
+  DB Stall Cycles:       61,319
+  (DB 0 hits: prefetch slower than compute → memory bound)
+============================================================
+
+=== python3 scripts/run_sim.py --workload matmul --M 64 --N 64 --K 1024 --dataflow OS ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: OS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running MatMul: C[64,64] = A[64,1024] x B[1024,64]
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          64,474
+  Compute Utilization:   6.35%
+  Total MACs:            4,194,304
+  Tiles Processed:       4
+  Tile Size (M,N,K):     (32, 32, 1024)
+  DRAM Read:             524,288 bytes
+  DRAM Write:            16,384 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/3
+  DB Stall Cycles:       44,104
+  (DB 0 hits: prefetch slower than compute → memory bound)
+============================================================
+
+=== python3 scripts/run_sim.py --workload matmul --M 64 --N 64 --K 1024 --dataflow WS ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: WS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running MatMul: C[64,64] = A[64,1024] x B[1024,64]
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          275,293
+  Compute Utilization:   1.49%
+  Total MACs:            4,194,304
+  Tiles Processed:       64
+  Tile Size (M,N,K):     (64, 32, 32)
+  DRAM Read:             393,216 bytes
+  DRAM Write:            16,384 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/63
+  DB Stall Cycles:       256,393
+  (DB 0 hits: prefetch slower than compute → memory bound)
+============================================================
+
+=== python3 scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256 --dataflow WS [DB=ON] ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: WS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running MatMul: C[256,256] = A[256,256] x B[256,256]
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          373,013
+  Compute Utilization:   4.39%
+  Total MACs:            16,777,216
+  Tiles Processed:       64
+  Tile Size (M,N,K):     (256, 32, 32)
+  DRAM Read:             1,179,648 bytes
+  DRAM Write:            262,144 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/63
+  DB Stall Cycles:       313,635
+  (DB 0 hits: prefetch slower than compute → memory bound)
+============================================================
+
+=== python3 scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256 --dataflow WS [DB=OFF] ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: WS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: False
+
+Running MatMul: C[256,256] = A[256,256] x B[256,256]
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          373,013
+  Compute Utilization:   4.39%
+  Total MACs:            16,777,216
+  Tiles Processed:       64
+  Tile Size (M,N,K):     (256, 32, 32)
+  DRAM Read:             1,179,648 bytes
+  DRAM Write:            262,144 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/0
+  DB Stall Cycles:       0
+============================================================
+
+=== python3 scripts/run_sim.py --workload transformer --seq-len 512 --hidden-dim 768 --num-heads 12 --dataflow OS ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: OS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running Transformer Layer: seq_len=512, hidden=768, heads=12
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          134,425,162
+  Compute Utilization:   2.93%
+  Total MACs:            4,026,531,840
+  Tiles Processed:       7,680
+  Tile Size (M,N,K):     (32, 32, 1228)
+  DRAM Read:             503,316,480 bytes
+  DRAM Write:            28,311,552 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/7652
+  DB Stall Cycles:       70,716,887
+  (DB 0 hits: prefetch slower than compute → memory bound)
+============================================================
+
+=== python3 scripts/run_sim.py --workload transformer --seq-len 512 --hidden-dim 768 --num-heads 12 --dataflow WS ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: WS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running Transformer Layer: seq_len=512, hidden=768, heads=12
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          102,284,694
+  Compute Utilization:   3.84%
+  Total MACs:            4,026,531,840
+  Tiles Processed:       7,680
+  Tile Size (M,N,K):     (512, 32, 32)
+  DRAM Read:             267,386,880 bytes
+  DRAM Write:            28,311,552 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/7652
+  DB Stall Cycles:       45,603,056
+  (DB 0 hits: prefetch slower than compute → memory bound)
+============================================================
+
+=== python3 scripts/run_sim.py --workload transformer --seq-len 128 --hidden-dim 768 --num-heads 12 --dataflow WS ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: WS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running Transformer Layer: seq_len=128, hidden=768, heads=12
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          40,451,261
+  Compute Utilization:   2.25%
+  Total MACs:            931,135,488
+  Tiles Processed:       7,104
+  Tile Size (M,N,K):     (128, 32, 32)
+  DRAM Read:             72,744,960 bytes
+  DRAM Write:            4,718,592 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/7076
+  DB Stall Cycles:       31,416,620
+  (DB 0 hits: prefetch slower than compute → memory bound)
+============================================================
+
+=== python3 scripts/run_sim.py --workload transformer --seq-len 1024 --hidden-dim 768 --num-heads 12 --dataflow WS ===
+NPU Config: NPU-Sim-32x32
+  Array: 32x32
+  Dataflow: WS
+  SRAM: 512KB, 32 banks, dual-port
+  DRAM: DRAMSim3Adapter
+  Dtype: FP16
+  Double Buffer: True
+
+Running Transformer Layer: seq_len=1024, hidden=768, heads=12
+
+============================================================
+NPU Simulation Summary
+============================================================
+  Total Cycles:          247,424,908
+  Compute Utilization:   3.50%
+  Total MACs:            8,858,370,048
+  Tiles Processed:       8,448
+  Tile Size (M,N,K):     (1024, 32, 32)
+  DRAM Read:             570,949,632 bytes
+  DRAM Write:            81,788,928 bytes
+  SRAM Bank Conflicts:   0
+  DB Hits/Misses:        0/8420
+  DB Stall Cycles:       69,861,648
+  (DB 0 hits: prefetch slower than compute → memory bound)
+============================================================
+
