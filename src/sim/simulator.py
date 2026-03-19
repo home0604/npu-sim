@@ -102,6 +102,7 @@ class NPUSimulator:
                     config_file=_config_file,
                     output_dir=_output_dir,
                     sim_engine=self.engine,
+                    npu_freq_mhz=config.systolic.clock_freq_mhz,
                 )
                 self.dram = DRAMSim3Adapter(_dramsim, self.engine)
             except ImportError as e:

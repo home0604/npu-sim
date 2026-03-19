@@ -3,6 +3,7 @@ double_buffer:
 dram:
   bandwidth_gbps: 25.6
   config_file: ext/DRAMsim3/configs/DDR4_8Gb_x16_2400.ini
+  #config_file: ext/DRAMsim3/configs/HBM2_8Gb_x128.ini
   latency_ns: 50.0
   output_dir: dramsim3_output
   use_dramsim3: true

@@ -12,6 +12,19 @@ if TYPE_CHECKING:
 CACHELINE_SIZE = 64
 
 
+def _parse_tck(config_file: str) -> float:
+    """Parse tCK (ns) from a DRAMSim3 .ini config file."""
+    try:
+        with open(config_file) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("tCK"):
+                    return float(line.split("=")[1].strip())
+    except OSError:
+        pass
+    return 1.0  # fallback: assume 1 ns (1000 MHz)
+
+
 @dataclass
 class DRAMRequest:
     address: int
@@ -129,6 +142,7 @@ class DRAMSim3Interface:
         config_file: str,
         output_dir: str,
         sim_engine: SimulationEngine,
+        npu_freq_mhz: int = 1000,
     ):
         self.sim_engine = sim_engine
         self._dramsim_cycle = 0
@@ -140,6 +154,13 @@ class DRAMSim3Interface:
         self.total_writes = 0
         self.total_read_bytes = 0
         self.total_write_bytes = 0
+
+        # Clock domain: DRAM ticks per NPU cycle
+        # tCK is parsed from the DRAMSim3 config file (.ini).
+        # ratio = npu_period_ns / tck_ns  (e.g. DDR4-2400: 1.0/0.83 ≈ 1.205)
+        self._tck_ns = _parse_tck(config_file)
+        self._npu_period_ns = 1000.0 / npu_freq_mhz
+        self._ratio = self._npu_period_ns / self._tck_ns
 
         try:
             import ctypes
@@ -166,14 +187,23 @@ class DRAMSim3Interface:
                 "Build it with scripts/setup_dramsim3.sh or use SimpleDRAMModel."
             )
 
+    def _dram_tick_to_npu_cycle(self, dram_tick: int) -> int:
+        """Convert DRAM tick count to NPU cycle count."""
+        return int(dram_tick / self._ratio)
+
+    def _npu_cycle_to_dram_tick(self, npu_cycle: int) -> int:
+        """Convert NPU cycle count to DRAM tick count."""
+        return int(npu_cycle * self._ratio)
+
     def _read_callback(self, address: int) -> None:
         from ..core.events import EventType
 
         if address in self._pending_reads:
             req = self._pending_reads.pop(address)
-            resp = DRAMResponse(request=req, complete_cycle=self._dramsim_cycle)
+            npu_complete = self._dram_tick_to_npu_cycle(self._dramsim_cycle)
+            resp = DRAMResponse(request=req, complete_cycle=npu_complete)
             self.sim_engine.schedule_event_at(
-                cycle=self._dramsim_cycle,
+                cycle=npu_complete,
                 event_type=EventType.DRAM_READ_COMPLETE,
                 data={"request": req, "response": resp},
             )
@@ -183,15 +213,17 @@ class DRAMSim3Interface:
 
         if address in self._pending_writes:
             req = self._pending_writes.pop(address)
-            resp = DRAMResponse(request=req, complete_cycle=self._dramsim_cycle)
+            npu_complete = self._dram_tick_to_npu_cycle(self._dramsim_cycle)
+            resp = DRAMResponse(request=req, complete_cycle=npu_complete)
             self.sim_engine.schedule_event_at(
-                cycle=self._dramsim_cycle,
+                cycle=npu_complete,
                 event_type=EventType.DRAM_WRITE_COMPLETE,
                 data={"request": req, "response": resp},
             )
 
-    def _advance_to_cycle(self, target_cycle: int) -> None:
-        while self._dramsim_cycle < target_cycle:
+    def _advance_to_cycle(self, npu_cycle: int) -> None:
+        target_dram_tick = self._npu_cycle_to_dram_tick(npu_cycle)
+        while self._dramsim_cycle < target_dram_tick:
             self._mem_system.ClockTick()
             self._dramsim_cycle += 1
 
@@ -261,8 +293,11 @@ class DRAMSim3Interface:
 
 
 # Batch size for DRAMSim3Adapter: tick this many cycles before draining events.
-# Larger = fewer Python loop iterations, faster; too large may delay completion handling.
-_DRAMSIM3_TICK_BATCH = 2048
+# Must stay below the minimum compute_cycles per tile. Over-ticking past the next
+# prefetch start point causes DB ON == DB OFF (compute hiding lost). batch=16 gives
+# <2% timing error with correct DB behaviour and is faster than large values because
+# it avoids wasting DRAMSim3 cycles on over-ticking.
+_DRAMSIM3_TICK_BATCH = 16
 
 
 class DRAMSim3Adapter:
@@ -319,7 +354,8 @@ class DRAMSim3Adapter:
         try:
             while state["count"] < expected_callbacks:
                 self._dramsim.tick_n(_DRAMSIM3_TICK_BATCH)
-                self._drain_events_until(self._dramsim.current_cycle)
+                npu_now = self._dramsim._dram_tick_to_npu_cycle(self._dramsim.current_cycle)
+                self._drain_events_until(npu_now)
             self.total_reads = self._dramsim.total_reads
             self.total_read_bytes = self._dramsim.total_read_bytes
             return DRAMResponse(
@@ -354,7 +390,8 @@ class DRAMSim3Adapter:
         try:
             while state["count"] < expected_callbacks:
                 self._dramsim.tick_n(_DRAMSIM3_TICK_BATCH)
-                self._drain_events_until(self._dramsim.current_cycle)
+                npu_now = self._dramsim._dram_tick_to_npu_cycle(self._dramsim.current_cycle)
+                self._drain_events_until(npu_now)
             self.total_writes = self._dramsim.total_writes
             self.total_write_bytes = self._dramsim.total_write_bytes
             return DRAMResponse(
