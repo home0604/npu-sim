@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Callable
 
-from .events import Event, EventQueue, EventType
+from core.events import Event, EventQueue, EventType
 
 
 class SimulationEngine:

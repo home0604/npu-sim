@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .sram import BankedSRAM
+from memory.sram import BankedSRAM
 
 
 @dataclass

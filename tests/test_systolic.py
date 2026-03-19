@@ -7,8 +7,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import torch
 
-from src.compute.systolic_array import SystolicArray
-from src.core.datatypes import AccumulatorType, DataType
+from compute.systolic_array import SystolicArray
+from core.datatypes import AccumulatorType, DataType
 
 
 def test_analytical_cycles_os_basic():

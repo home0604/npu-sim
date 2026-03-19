@@ -3,16 +3,16 @@ from __future__ import annotations
 from collections import deque
 from typing import TYPE_CHECKING
 
-from ..compute.systolic_array import SystolicArray
-from ..core.events import EventType
-from ..core.stats import SimStats
-from ..memory.double_buffer import BufferSlot, DoubleBufferController, SlotState
-from ..memory.memory_controller import MemoryController
-from ..memory.sram_buffers import SRAMBuffer
-from .stationary import TileOp
+from compute.systolic_array import SystolicArray
+from core.events import EventType
+from core.stats import SimStats
+from memory.double_buffer import BufferSlot, DoubleBufferController, SlotState
+from memory.memory_controller import MemoryController
+from memory.sram_buffers import SRAMBuffer
+from dataflow.stationary import TileOp
 
 if TYPE_CHECKING:
-    from ..core.clock import SimulationEngine
+    from core.clock import SimulationEngine
 
 
 class TileScheduler:
@@ -178,10 +178,12 @@ class TileScheduler:
         sram_buf = self.weight_bufs[slot_idx]
         size_bytes = tile.tile_m * tile.tile_k * self.systolic.dtype.num_bytes
 
-        done = self.mem_ctrl.load_from_dram(dram_addr, sram_buf.base_addr, size_bytes, cycle, "weight")
+        result = self.mem_ctrl.load_from_dram(dram_addr, sram_buf.base_addr, size_bytes, cycle, "weight")
         self.stats.memory.dram_read_bytes += size_bytes
         self.stats.memory.dram_read_count += 1
-        return done
+        self.stats.memory.dram_read_cycles += result.dram_cycles
+        self.stats.memory.sram_write_cycles += result.sram_cycles
+        return result.complete_cycle
 
     def _load_activation(self, tile: TileOp, slot_idx: int, cycle: int) -> int:
         """Load activation tile from DRAM to SRAM buffer."""
@@ -189,20 +191,24 @@ class TileScheduler:
         sram_buf = self.act_bufs[slot_idx]
         size_bytes = tile.tile_k * tile.tile_n * self.systolic.dtype.num_bytes
 
-        done = self.mem_ctrl.load_from_dram(dram_addr, sram_buf.base_addr, size_bytes, cycle, "activation")
+        result = self.mem_ctrl.load_from_dram(dram_addr, sram_buf.base_addr, size_bytes, cycle, "activation")
         self.stats.memory.dram_read_bytes += size_bytes
         self.stats.memory.dram_read_count += 1
-        return done
+        self.stats.memory.dram_read_cycles += result.dram_cycles
+        self.stats.memory.sram_write_cycles += result.sram_cycles
+        return result.complete_cycle
 
     def _store_output(self, tile: TileOp, cycle: int) -> int:
         """Store output tile from SRAM to DRAM."""
         dram_addr = self.output_base_dram + tile.output_dram_offset
         size_bytes = tile.tile_m * tile.tile_n * self.systolic.acc_dtype.num_bytes
 
-        done = self.mem_ctrl.store_to_dram(self.output_buf.base_addr, dram_addr, size_bytes, cycle, "output")
+        result = self.mem_ctrl.store_to_dram(self.output_buf.base_addr, dram_addr, size_bytes, cycle, "output")
         self.stats.memory.dram_write_bytes += size_bytes
         self.stats.memory.dram_write_count += 1
-        return done
+        self.stats.memory.sram_read_cycles += result.sram_cycles
+        self.stats.memory.dram_write_cycles += result.dram_cycles
+        return result.complete_cycle
 
     def _update_compute_stats(self, tile: TileOp, cycles_info) -> None:
         self.stats.compute.total_mac_ops += tile.tile_m * tile.tile_n * tile.tile_k

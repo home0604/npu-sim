@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .tiler import TileConfig, Tiler
+from dataflow.tiler import TileConfig, Tiler
 
 
 @dataclass

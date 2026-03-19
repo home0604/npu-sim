@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import torch
 
-from ..compute.systolic_array import SystolicArray
-from ..core.datatypes import AccumulatorType, DataType
-from ..dataflow.tiler import TileConfig, Tiler
-from ..dataflow.stationary import StationaryDataflow, TileOp
+from compute.systolic_array import SystolicArray
+from core.datatypes import AccumulatorType, DataType
+from dataflow.tiler import TileConfig, Tiler
+from dataflow.stationary import StationaryDataflow, TileOp
 
 
 def run_schedule_functional(

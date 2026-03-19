@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..core.datatypes import DataType
+from core.datatypes import DataType
 
 
 @dataclass

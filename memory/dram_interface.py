@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..core.clock import SimulationEngine
+    from core.clock import SimulationEngine
 
 
 CACHELINE_SIZE = 64
@@ -165,11 +165,11 @@ class DRAMSim3Interface:
         try:
             import ctypes
             # Pre-load libdramsim3.so so dramsim3_py can find it
-            _lib = Path(__file__).resolve().parent.parent.parent / "ext" / "DRAMsim3" / "libdramsim3.so"
+            _lib = Path(__file__).resolve().parent.parent / "ext" / "DRAMsim3" / "libdramsim3.so"
             if _lib.exists():
                 ctypes.CDLL(str(_lib))
             # dramsim3_py.so is built in project root; ensure it is on path
-            _pkg_root = Path(__file__).resolve().parent.parent.parent
+            _pkg_root = Path(__file__).resolve().parent.parent
             if str(_pkg_root) not in sys.path:
                 sys.path.insert(0, str(_pkg_root))
             import dramsim3_py  # type: ignore
@@ -196,7 +196,7 @@ class DRAMSim3Interface:
         return int(npu_cycle * self._ratio)
 
     def _read_callback(self, address: int) -> None:
-        from ..core.events import EventType
+        from core.events import EventType
 
         if address in self._pending_reads:
             req = self._pending_reads.pop(address)
@@ -209,7 +209,7 @@ class DRAMSim3Interface:
             )
 
     def _write_callback(self, address: int) -> None:
-        from ..core.events import EventType
+        from core.events import EventType
 
         if address in self._pending_writes:
             req = self._pending_writes.pop(address)
@@ -297,7 +297,7 @@ class DRAMSim3Interface:
 # prefetch start point causes DB ON == DB OFF (compute hiding lost). batch=16 gives
 # <2% timing error with correct DB behaviour and is faster than large values because
 # it avoids wasting DRAMSim3 cycles on over-ticking.
-_DRAMSIM3_TICK_BATCH = 16
+_DRAMSIM3_TICK_BATCH = 1
 
 
 class DRAMSim3Adapter:
@@ -332,7 +332,7 @@ class DRAMSim3Adapter:
     def _sync_read_completion(
         self, request_id: int, expected_callbacks: int
     ) -> DRAMResponse:
-        from ..core.events import EventType
+        from core.events import EventType
 
         state = {
             "count": 0,
@@ -368,7 +368,7 @@ class DRAMSim3Adapter:
     def _sync_write_completion(
         self, request_id: int, expected_callbacks: int
     ) -> DRAMResponse:
-        from ..core.events import EventType
+        from core.events import EventType
 
         state = {
             "count": 0,

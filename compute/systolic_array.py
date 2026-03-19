@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import torch
 
-from ..core.datatypes import AccumulatorType, DataType
+from core.datatypes import AccumulatorType, DataType
 
 
 @dataclass

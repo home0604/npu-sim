@@ -16,4 +16,4 @@ dev = ["pytest>=7.0", "pybind11>=2.11"]
 testpaths = ["tests"]
 
 [tool.setuptools]
-packages = ["src", "src.core", "src.compute", "src.memory", "src.dataflow", "src.sim", "src.workloads", "src.configs"]
+packages = ["core", "compute", "memory", "dataflow", "sim", "workloads", "configs"]

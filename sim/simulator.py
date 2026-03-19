@@ -4,25 +4,25 @@ from pathlib import Path
 
 import torch
 
-from ..compute.special_functions import SpecialFunctionUnit
-from ..compute.systolic_array import SystolicArray
-from ..core.clock import SimulationEngine
-from ..core.config import DataTypeConfig, NPUConfig, load_config
-from ..core.datatypes import AccumulatorType, DataType
-from ..core.stats import LayerStats, SimStats
-from ..dataflow.scheduler import TileScheduler
-from ..dataflow.tiler import Tiler
-from ..dataflow.stationary import StationaryDataflow
-from ..memory.dram_interface import (
+from compute.special_functions import SpecialFunctionUnit
+from compute.systolic_array import SystolicArray
+from core.clock import SimulationEngine
+from core.config import DataTypeConfig, NPUConfig, load_config
+from core.datatypes import AccumulatorType, DataType
+from core.stats import LayerStats, SimStats
+from dataflow.scheduler import TileScheduler
+from dataflow.tiler import Tiler
+from dataflow.stationary import StationaryDataflow
+from memory.dram_interface import (
     DRAMSim3Adapter,
     DRAMSim3Interface,
     SimpleDRAMModel,
 )
-from ..memory.double_buffer import DoubleBufferController
-from ..memory.memory_controller import MemoryController
-from ..memory.sram import BankedSRAM, PortType
-from ..memory.sram_buffers import SRAMBuffer, create_buffer_partitions
-from .functional_check import (
+from memory.double_buffer import DoubleBufferController
+from memory.memory_controller import MemoryController
+from memory.sram import BankedSRAM, PortType
+from memory.sram_buffers import SRAMBuffer, create_buffer_partitions
+from sim.functional_check import (
     compare_outputs,
     compute_diff_report,
     format_diff_report,
@@ -90,7 +90,7 @@ class NPUSimulator:
         # DRAM: SimpleDRAMModel (analytical) or DRAMSim3 (cycle-accurate) via adapter
         if getattr(config.dram, "use_dramsim3", False):
             try:
-                _pkg_root = Path(__file__).resolve().parent.parent.parent
+                _pkg_root = Path(__file__).resolve().parent.parent
                 _config_file = config.dram.config_file
                 if not Path(_config_file).is_absolute():
                     _config_file = str(_pkg_root / _config_file)

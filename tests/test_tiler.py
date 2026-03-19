@@ -5,8 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.core.config import DataTypeConfig, SRAMConfig, SystolicArrayConfig
-from src.dataflow.tiler import Tiler
+from core.config import DataTypeConfig, SRAMConfig, SystolicArrayConfig
+from dataflow.tiler import Tiler
 
 
 def make_tiler(

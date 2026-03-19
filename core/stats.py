@@ -21,6 +21,8 @@ class MemoryStats:
     dram_read_count: int = 0
     dram_write_count: int = 0
     dram_total_latency_cycles: int = 0
+    dram_read_cycles: int = 0
+    dram_write_cycles: int = 0
 
     sram_read_bytes: int = 0
     sram_write_bytes: int = 0
@@ -28,6 +30,8 @@ class MemoryStats:
     sram_write_count: int = 0
     sram_bank_conflicts: int = 0
     sram_port_conflicts: int = 0
+    sram_read_cycles: int = 0
+    sram_write_cycles: int = 0
 
     double_buffer_hits: int = 0
     double_buffer_misses: int = 0
@@ -104,6 +108,10 @@ class SimStats:
             "memory": {
                 "dram_read_bytes": self.memory.dram_read_bytes,
                 "dram_write_bytes": self.memory.dram_write_bytes,
+                "dram_read_cycles": self.memory.dram_read_cycles,
+                "dram_write_cycles": self.memory.dram_write_cycles,
+                "sram_read_cycles": self.memory.sram_read_cycles,
+                "sram_write_cycles": self.memory.sram_write_cycles,
                 "sram_bank_conflicts": self.memory.sram_bank_conflicts,
                 "double_buffer_hits": self.memory.double_buffer_hits,
                 "double_buffer_misses": self.memory.double_buffer_misses,
@@ -122,19 +130,28 @@ class SimStats:
 
     def print_summary(self) -> None:
         s = self.summary()
+        mem = s["memory"]
+        comp = s["compute"]
         print("=" * 60)
         print(f"NPU Simulation Summary")
         print("=" * 60)
         print(f"  Total Cycles:          {s['total_cycles']:,}")
         print(f"  Compute Utilization:   {s['compute_utilization']}")
-        print(f"  Total MACs:            {s['compute']['total_mac_ops']:,}")
-        print(f"  Tiles Processed:       {s['compute']['tiles_processed']:,}")
+        print(f"  Total MACs:            {comp['total_mac_ops']:,}")
+        print(f"  Tiles Processed:       {comp['tiles_processed']:,}")
         print(f"  Tile Size (M,N,K):     ({s['tile']['tile_m']}, {s['tile']['tile_n']}, {s['tile']['tile_k']})")
-        print(f"  DRAM Read:             {s['memory']['dram_read_bytes']:,} bytes")
-        print(f"  DRAM Write:            {s['memory']['dram_write_bytes']:,} bytes")
-        print(f"  SRAM Bank Conflicts:   {s['memory']['sram_bank_conflicts']:,}")
-        print(f"  DB Hits/Misses:        {s['memory']['double_buffer_hits']}/{s['memory']['double_buffer_misses']}")
-        print(f"  DB Stall Cycles:       {s['memory']['double_buffer_stall_cycles']:,}")
-        if s["memory"]["double_buffer_misses"] > 0 and s["memory"]["double_buffer_hits"] == 0:
+        print()
+        print(f"  --- Cycle Breakdown ---")
+        print(f"  Systolic Compute:      {comp['total_compute_cycles']:,} cycles")
+        print(f"  DRAM Read:             {mem['dram_read_cycles']:,} cycles  ({mem['dram_read_bytes']:,} bytes)")
+        print(f"  DRAM Write:            {mem['dram_write_cycles']:,} cycles  ({mem['dram_write_bytes']:,} bytes)")
+        print(f"  SRAM Read  (→SA/DRAM): {mem['sram_read_cycles']:,} cycles")
+        print(f"  SRAM Write (←DRAM):    {mem['sram_write_cycles']:,} cycles")
+        print()
+        print(f"  --- Double Buffer ---")
+        print(f"  SRAM Bank Conflicts:   {mem['sram_bank_conflicts']:,}")
+        print(f"  DB Hits/Misses:        {mem['double_buffer_hits']}/{mem['double_buffer_misses']}")
+        print(f"  DB Stall Cycles:       {mem['double_buffer_stall_cycles']:,}")
+        if mem["double_buffer_misses"] > 0 and mem["double_buffer_hits"] == 0:
             print("  (DB 0 hits: prefetch slower than compute → memory bound)")
         print("=" * 60)

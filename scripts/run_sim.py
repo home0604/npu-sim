@@ -6,13 +6,13 @@ import json
 import sys
 from pathlib import Path
 
-# Add project root (npu-sim) to path so "from src ..." resolves to src/
+# Add project root (npu-sim) to path
 _root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_root))
 
-from src.core.config import load_config
-from src.sim.functional_check import format_diff_report
-from src.sim.simulator import NPUSimulator
+from core.config import load_config
+from sim.functional_check import format_diff_report
+from sim.simulator import NPUSimulator
 
 
 def main():
@@ -20,7 +20,7 @@ def main():
     parser.add_argument(
         "--config",
         type=str,
-        default=str(_root / "src" / "configs" / "default.yaml"),
+        default=str(_root / "configs" / "default.yaml"),
         help="Path to NPU config YAML file",
     )
     parser.add_argument("--workload", type=str, default="matmul", choices=["matmul", "attention", "transformer"])
@@ -48,10 +48,16 @@ def main():
         choices=["OS", "WS", "IS"],
         help="Override dataflow from config (OS, WS, or IS). If not set, uses config file.",
     )
+    parser.add_argument(
+        "--use-db",
+        action="store_true",
+        help="Enable double buffering (disabled by default)",
+    )
 
     args = parser.parse_args()
 
     config = load_config(args.config)
+    config.double_buffer.enabled = args.use_db
     if args.use_dramsim3:
         config.dram.use_dramsim3 = True
     if args.dataflow is not None:

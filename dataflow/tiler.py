@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..core.config import DataTypeConfig, SRAMConfig, SystolicArrayConfig
+from core.config import DataTypeConfig, SRAMConfig, SystolicArrayConfig
 
 
 @dataclass

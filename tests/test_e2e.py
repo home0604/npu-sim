@@ -5,8 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.core.config import NPUConfig
-from src.sim.simulator import NPUSimulator
+from core.config import NPUConfig
+from sim.simulator import NPUSimulator
 
 
 def make_simulator(rows=32, cols=32, sram_kb=512, dtype="INT8", dataflow="OS") -> NPUSimulator:
