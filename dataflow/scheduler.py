@@ -81,8 +81,8 @@ class TileScheduler:
         if first_tile.load_weight:
             weight_done = self._load_weight(first_tile, slot_idx, cycle)
 
-        act_done = self._load_activation(first_tile, slot_idx, cycle)
-        data_ready_cycle = max(weight_done, act_done)
+        act_done = self._load_activation(first_tile, slot_idx, weight_done)
+        data_ready_cycle = act_done  # weight → act sequential, so act_done is always last
 
         # Compute first tile
         cycles_info = self.systolic.analytical_cycles(
@@ -110,8 +110,8 @@ class TileScheduler:
             if current_tile.load_weight:
                 weight_done = self._load_weight(current_tile, next_slot_idx, prefetch_start)
 
-            act_done = self._load_activation(current_tile, next_slot_idx, prefetch_start)
-            next_data_ready = max(weight_done, act_done)
+            act_done = self._load_activation(current_tile, next_slot_idx, weight_done)
+            next_data_ready = act_done  # weight → act sequential, so act_done is always last
 
             # Wait for both: previous compute done AND next data ready
             compute_start = max(prev_compute_done, next_data_ready)
@@ -155,13 +155,15 @@ class TileScheduler:
             if tile.load_weight:
                 weight_done = self._load_weight(tile, 0, cycle)
 
-            act_done = self._load_activation(tile, 0, cycle)
-            data_ready = max(weight_done, act_done)
+            # Use weight_done as start so dram_read_cycles measures actual
+            # act DRAM time only, not from tile start (which would include weight time).
+            act_done = self._load_activation(tile, 0, weight_done)
+            data_ready_cycle = act_done  # weight → act sequential, so act_done is always last
 
             cycles_info = self.systolic.analytical_cycles(
                 tile.tile_m, tile.tile_n, tile.tile_k, dataflow=self.dataflow,
             )
-            compute_done = data_ready + cycles_info.total_cycles
+            compute_done = data_ready_cycle + cycles_info.total_cycles
             self._update_compute_stats(tile, cycles_info)
 
             if tile.store_output:

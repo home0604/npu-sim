@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 
+from compute.dequant_unit import DequantizationUnit
 from compute.systolic_array import SystolicArray
 from core.datatypes import AccumulatorType, DataType
+from dataflow.gptvq_dataflow import GPTVQTileOp
+from dataflow.gptvq_tiler import GPTVQTileConfig
 from dataflow.tiler import TileConfig, Tiler
 from dataflow.stationary import StationaryDataflow, TileOp
 
@@ -290,6 +295,70 @@ def compare_outputs(
         max_diff = (C_sim - C_ref).abs().max().item()
         return False, f"Output mismatch (FP32): max_abs_diff={max_diff} (rtol={rtol}, atol={atol})"
     return True, "Output matches reference (allclose, FP32)."
+
+
+def run_gptvq_schedule_functional(
+    schedule: list[GPTVQTileOp],
+    tile_config: GPTVQTileConfig,
+    codebook: torch.Tensor,
+    indices: torch.Tensor,
+    activation: torch.Tensor,
+    dequant_unit: DequantizationUnit,
+    systolic: SystolicArray,
+    M: int,
+    N: int,
+    K: int,
+    scales: torch.Tensor | None = None,
+    zero_points: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Execute GPTVQ schedule with real data for correctness checking.
+
+    Dequantizes weight tile-by-tile using codebook + indices (+ optional scaling),
+    then computes matmul in same tile order as the cycle-accurate scheduler.
+    """
+    acc_dtype = systolic.acc_dtype.torch_dtype
+    C_sim = torch.zeros((M, N), dtype=acc_dtype)
+    d = dequant_unit.vector_dim
+
+    for tile in schedule:
+        k_group_start = (tile.k_idx * tile_config.tile_k) // d
+        k_groups = math.ceil(tile.tile_k / d)
+        row_start = tile.m_idx * tile_config.tile_m
+        idx_tile = indices[
+            row_start : row_start + tile.tile_m,
+            k_group_start : k_group_start + k_groups,
+        ]
+
+        sc_tile = None
+        zp_tile = None
+        if dequant_unit.use_scaling and scales is not None:
+            sc_tile = scales[k_group_start : k_group_start + k_groups]
+            if zero_points is not None:
+                zp_tile = zero_points[k_group_start : k_group_start + k_groups]
+
+        dequant_result = dequant_unit.dequantize(
+            idx_tile, codebook, tile.tile_m, tile.tile_k,
+            scales=sc_tile, zero_points=zp_tile,
+        )
+        weight_tile = dequant_result.output
+
+        k_start = tile.k_idx * tile_config.tile_k
+        n_start = tile.n_idx * tile_config.tile_n
+        act_tile = activation[
+            k_start : k_start + tile.tile_k,
+            n_start : n_start + tile.tile_n,
+        ]
+
+        result = systolic.compute_tile(weight_tile.float(), act_tile.float()).output
+
+        out_row = tile.m_idx * tile_config.tile_m
+        out_col = tile.n_idx * tile_config.tile_n
+        if tile.accumulate:
+            C_sim[out_row : out_row + tile.tile_m, out_col : out_col + tile.tile_n] += result
+        else:
+            C_sim[out_row : out_row + tile.tile_m, out_col : out_col + tile.tile_n] = result
+
+    return C_sim
 
 
 def format_diff_report(report: dict[str, Any]) -> str:

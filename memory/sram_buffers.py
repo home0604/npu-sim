@@ -90,3 +90,82 @@ def create_buffer_partitions(
 
     buffers["output"] = [SRAMBuffer(sram, addr, output_size, "output")]
     return buffers
+
+
+def create_gptvq_buffer_partitions(
+    sram: BankedSRAM,
+    codebook_fraction: float = 0.05,
+    index_fraction: float = 0.20,
+    scale_fraction: float = 0.05,
+    activation_fraction: float = 0.35,
+    output_fraction: float = 0.35,
+    double_buffer: bool = True,
+    use_scaling: bool = False,
+) -> dict[str, list[SRAMBuffer]]:
+    """Create GPTVQ buffer partitions within the SRAM.
+
+    Partitions into 5 regions: codebook, index, scale, activation, output.
+    When scaling is disabled, scale buffer space is redistributed to index and activation.
+
+    With double buffering: index, scale, activation get 2 slots each.
+    Codebook and output are single-slot.
+    """
+    total = sram.size_bytes
+
+    if not use_scaling:
+        extra = scale_fraction / 2
+        index_fraction += extra
+        activation_fraction += extra
+        scale_fraction = 0.0
+
+    codebook_size = int(total * codebook_fraction)
+    index_size = int(total * index_fraction)
+    scale_size = int(total * scale_fraction)
+    act_size = int(total * activation_fraction)
+    output_size = total - codebook_size - index_size - scale_size - act_size
+
+    buffers: dict[str, list[SRAMBuffer]] = {}
+    addr = 0
+
+    buffers["codebook"] = [SRAMBuffer(sram, addr, codebook_size, "codebook")]
+    addr += codebook_size
+
+    if double_buffer:
+        slot_idx = index_size // 2
+        buffers["index"] = [
+            SRAMBuffer(sram, addr, slot_idx, "index_A"),
+            SRAMBuffer(sram, addr + slot_idx, slot_idx, "index_B"),
+        ]
+        addr += index_size
+
+        if use_scaling and scale_size > 0:
+            slot_sc = scale_size // 2
+            buffers["scale"] = [
+                SRAMBuffer(sram, addr, slot_sc, "scale_A"),
+                SRAMBuffer(sram, addr + slot_sc, slot_sc, "scale_B"),
+            ]
+        else:
+            buffers["scale"] = [SRAMBuffer(sram, addr, 0, "scale_none")]
+        addr += scale_size
+
+        slot_act = act_size // 2
+        buffers["activation"] = [
+            SRAMBuffer(sram, addr, slot_act, "activation_A"),
+            SRAMBuffer(sram, addr + slot_act, slot_act, "activation_B"),
+        ]
+        addr += act_size
+    else:
+        buffers["index"] = [SRAMBuffer(sram, addr, index_size, "index")]
+        addr += index_size
+
+        if use_scaling and scale_size > 0:
+            buffers["scale"] = [SRAMBuffer(sram, addr, scale_size, "scale")]
+        else:
+            buffers["scale"] = [SRAMBuffer(sram, addr, 0, "scale_none")]
+        addr += scale_size
+
+        buffers["activation"] = [SRAMBuffer(sram, addr, act_size, "activation")]
+        addr += act_size
+
+    buffers["output"] = [SRAMBuffer(sram, addr, output_size, "output")]
+    return buffers
