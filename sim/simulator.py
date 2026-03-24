@@ -182,7 +182,7 @@ class NPUSimulator:
         """Initialize GPTVQ-specific components."""
         cfg = self.config
 
-        self.dequant_unit = DequantizationUnit(cfg.gptvq)
+        self.dequant_unit = DequantizationUnit(cfg.gptvq, cfg.sram)
 
         self.gptvq_buffers = create_gptvq_buffer_partitions(
             self.sram,

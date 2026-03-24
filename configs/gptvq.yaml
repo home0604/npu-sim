@@ -1,51 +1,28 @@
-name: "NPU-Sim-32x32-GPTVQ"
+# gptvq.yaml - GPTVQ 실험용 config
+# default.yaml을 상속하고 GPTVQ 관련 설정만 override
 
-systolic:
-  rows: 32
-  cols: 32
-  clock_freq_mhz: 1000
+extends: default.yaml
 
-dtype:
-  compute_dtype: "FP16"
-  accumulator_dtype: "FP32"
+name: NPU-Sim-32x32-GPTVQ
 
 sram:
-  total_size_kb: 512
-  num_banks: 32
-  bank_width_bytes: 64
-  port_type: "dual"
-  read_latency_cycles: 1
-  write_latency_cycles: 1
-  # Standard WS fractions (used when gptvq disabled)
-  weight_buffer_fraction: 0.4
-  activation_buffer_fraction: 0.3
-  output_buffer_fraction: 0.3
-  # GPTVQ buffer fractions (used when gptvq enabled)
+  # GPTVQ buffer fractions (standard fractions override)
   codebook_buffer_fraction: 0.05
   index_buffer_fraction: 0.20
   scale_buffer_fraction: 0.05
-  activation_buffer_fraction: 0.35
-  output_buffer_fraction: 0.35
-
-dram:
-  use_dramsim3: false
-  config_file: "ext/DRAMsim3/configs/DDR4_8Gb_x16_2400.ini"
-  output_dir: "dramsim3_output"
-  bandwidth_gbps: 25.6
-  latency_ns: 50.0
-
-double_buffer:
-  enabled: true
+  gptvq_activation_buffer_fraction: 0.35
+  gptvq_output_buffer_fraction: 0.35
 
 gptvq:
   enabled: true
-  codebook_size: 16       # R: number of centroids (4-bit index)
-  vector_dim: 2           # d: dimension of each codebook vector
-  index_bits: 4           # bits per index = log2(codebook_size)
-  num_codebooks: 1        # standard single codebook
-  use_scaling: false      # disable block-wise scaling by default
-  scale_dtype: "FP16"
-  zero_point_dtype: "FP16"
-  codebook_dtype: "FP16"
-  dequant_pipeline_stages: 3
-  dequant_throughput: 1   # vectors dequantized per cycle
+  codebook_size: 16           # R: centroid 수 (index_bits=4 → 2^4=16)
+  vector_dim: 2               # d: codebook vector 차원
+  index_bits: 4               # bits per index = log2(codebook_size)
+  num_stages: 1               # S: RVQ/AQ stage 수 (standard VQ = 1)
+  use_scaling: false          # per-group scaling: s * codebook[idx] + z
+  scale_dtype: FP16
+  zero_point_dtype: FP16
+  codebook_dtype: FP16
+  dequant_pipeline_stages: 3  # pipeline fill latency
+  # dequant_throughput 제거 — SRAM bank 구조에서 자동 계산
+  # read_latency = ceil(E * S / (N_bank * w_b))

@@ -71,13 +71,12 @@ class GPTVQConfig:
     codebook_size: int = 16  # R: number of centroids
     vector_dim: int = 2  # d: dimension of each codebook vector
     index_bits: int = 4  # bits per index (log2(codebook_size))
-    num_codebooks: int = 1  # number of codebooks (1 for standard VQ)
+    num_stages: int = 1  # S: RVQ/AQ stage 수 (standard VQ = 1)
     use_scaling: bool = False  # enable per-group scaling (s, z)
     scale_dtype: str = "FP16"  # dtype for scaling factors s
     zero_point_dtype: str = "FP16"  # dtype for zero points z
     codebook_dtype: str = "FP16"  # dtype for codebook entries
     dequant_pipeline_stages: int = 3  # pipeline depth of dequant unit
-    dequant_throughput: int = 1  # vectors dequantized per cycle (pipelined)
 
     @property
     def codebook_entry_bytes(self) -> int:
@@ -127,9 +126,25 @@ def _dict_to_dataclass(cls, data: dict):
     return cls(**kwargs)
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    result = base.copy()
+    for key, val in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(val, dict):
+            result[key] = _deep_merge(result[key], val)
+        else:
+            result[key] = val
+    return result
+
+
 def load_config(path: str | Path) -> NPUConfig:
-    """Load NPU configuration from a YAML file."""
+    """Load NPU configuration from a YAML file.
+
+    Supports `extends: path/to/base.yaml` for config inheritance.
+    """
     path = Path(path)
     with open(path) as f:
-        data = yaml.safe_load(f)
+        data = yaml.safe_load(f) or {}
+    if base := data.pop("extends", None):
+        with open(path.parent / base) as f:
+            data = _deep_merge(yaml.safe_load(f), data)
     return _dict_to_dataclass(NPUConfig, data)

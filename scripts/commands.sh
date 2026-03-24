@@ -40,14 +40,30 @@ python3 scripts/run_sim.py --workload transformer --seq-len 512 --hidden-dim 768
 python3 scripts/run_sim.py --workload transformer --seq-len 128 --hidden-dim 768 --num-heads 12 --dataflow WS --use-db --json
 
 # -----------------------------------------------------------------------------
-# 2. 벤치마크 (run_benchmark.py)
+# 2. GPTVQ 시뮬레이션
+# -----------------------------------------------------------------------------
+
+# GPTVQ 기본 실행 (gptvq.yaml 사용)
+python3 scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256 --config configs/gptvq.yaml
+
+# GPTVQ + JSON 출력
+python3 scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256 --config configs/gptvq.yaml --json
+
+# GPTVQ + Double Buffer
+python3 scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256 --config configs/gptvq.yaml --use-db
+
+# Dequantization 사이클 파라미터 스윕 (vector_dim × num_stages)
+python3 scripts/run_dequant_sweep.py
+
+# -----------------------------------------------------------------------------
+# 3. 벤치마크 (run_benchmark.py)
 # -----------------------------------------------------------------------------
 
 # 전체 벤치마크 실행 (결과: reports/results/ 에 txt + json 저장)
 python3 scripts/run_benchmark.py
 
 # -----------------------------------------------------------------------------
-# 3. 테스트
+# 4. 테스트
 # -----------------------------------------------------------------------------
 
 # 전체 테스트
@@ -60,7 +76,7 @@ pytest tests/test_e2e.py
 pytest tests/test_e2e.py::TestE2E::test_small_matmul -v
 
 # -----------------------------------------------------------------------------
-# 4. DRAMSim3 빌드 (최초 1회)
+# 5. DRAMSim3 빌드 (최초 1회)
 # -----------------------------------------------------------------------------
 
 bash scripts/setup_dramsim3.sh
