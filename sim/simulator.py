@@ -189,6 +189,7 @@ class NPUSimulator:
             codebook_fraction=cfg.sram.codebook_buffer_fraction,
             index_fraction=cfg.sram.index_buffer_fraction,
             scale_fraction=cfg.sram.scale_buffer_fraction,
+            dequant_weight_fraction=cfg.sram.dequant_weight_buffer_fraction,
             activation_fraction=cfg.sram.activation_buffer_fraction,
             output_fraction=cfg.sram.output_buffer_fraction,
             double_buffer=cfg.double_buffer.enabled,
@@ -222,6 +223,7 @@ class NPUSimulator:
             codebook_bufs=self.gptvq_buffers["codebook"],
             index_bufs=self.gptvq_buffers["index"],
             scale_bufs=self.gptvq_buffers["scale"],
+            dequant_weight_bufs=self.gptvq_buffers["dequant_weight"],
             act_bufs=self.gptvq_buffers["activation"],
             output_buf=self.gptvq_buffers["output"][0],
             stats=self.stats,
@@ -230,6 +232,7 @@ class NPUSimulator:
             scale_base_dram=scale_base_dram,
             act_base_dram=act_base_dram,
             output_base_dram=output_base_dram,
+            dataflow=self.config.systolic.dataflow,
         )
 
     def run_matmul(
@@ -359,10 +362,7 @@ class NPUSimulator:
         zero_points: torch.Tensor | None = None,
         seed: int | None = 42,
     ) -> dict:
-        """Simulate a GPTVQ MatMul: C[M,N] = dequant(codebook, indices, scales)[M,K] * A[K,N].
-
-        Uses Output-Stationary dataflow with dequantization.
-        """
+        """Simulate a GPTVQ MatMul: C[M,N] = dequant(codebook, indices, scales)[M,K] * A[K,N]."""
         import math
 
         gptvq_cfg = self.config.gptvq
@@ -371,6 +371,7 @@ class NPUSimulator:
 
         tile_config, schedule = self.gptvq_dataflow.generate_schedule(
             M, N, K,
+            dataflow=self.config.systolic.dataflow,
             codebook_base_addr=codebook_base,
             index_base_addr=index_base,
             scale_base_addr=scale_base,

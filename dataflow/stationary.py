@@ -37,14 +37,14 @@ class StationaryDataflow:
         Weight and activation loaded every K-tile; output stored on last K.
 
     WS (Weight Stationary):
-        Loop: K -> N -> M (inner).  Weight (k,n) stays in PEs.
-        Weight loaded once per (k,n); activation loaded every M-tile;
-        output stored every M-tile (partial sums flow out).
+        Loop: M -> K -> N (inner).  Weight W[m,k] stays in PEs.
+        Weight loaded once per (m,k); activation loaded every N-tile;
+        output stored on last K (accumulates over K).
 
     IS (Input Stationary):
-        Loop: M -> K -> N (inner).  Input/activation (m,k) stays in PEs.
-        Activation loaded once per (m,k); weight loaded every N-tile;
-        output stored every N-tile.
+        Loop: K -> N -> M (inner).  Activation A[k,n] stays in PEs.
+        Activation loaded once per (k,n); weight loaded every M-tile;
+        output stored on last K (accumulates over K).
     """
 
     def __init__(self, tiler: Tiler, dataflow: str = "OS"):
@@ -73,7 +73,7 @@ class StationaryDataflow:
             return self._schedule_ws(tc, M, N, K, bpe, acc_bytes)
         elif self.dataflow == "IS":
             return self._schedule_is(tc, M, N, K, bpe, acc_bytes)
-        else:
+        else:  # OS
             return self._schedule_os(tc, M, N, K, bpe, acc_bytes)
 
     def _schedule_os(
@@ -114,51 +114,10 @@ class StationaryDataflow:
     def _schedule_ws(
         self, tc: TileConfig, M: int, N: int, K: int, bpe: int, acc_bytes: int
     ) -> tuple[TileConfig, list[TileOp]]:
-        """WS: K -> N -> M loop.
+        """WS: M -> K -> N loop.
 
-        B[K,N] (activation) is spatially mapped to PEs (SR=K, SC=N).
-        A[M,K] (weight) streams through along the temporal axis T=M.
-        Partial sums for different K-tiles at the same (m,n) are accumulated.
-        """
-        schedule: list[TileOp] = []
-
-        for k in range(tc.num_k_tiles):
-            eff_k = min(tc.tile_k, K - k * tc.tile_k)
-            for n in range(tc.num_n_tiles):
-                eff_n = min(tc.tile_n, N - n * tc.tile_n)
-                for m in range(tc.num_m_tiles):
-                    eff_m = min(tc.tile_m, M - m * tc.tile_m)
-
-                    is_first_m = m == 0
-                    is_last_k = k == tc.num_k_tiles - 1
-
-                    w_offset = (m * tc.tile_m * K + k * tc.tile_k) * bpe
-                    a_offset = (k * tc.tile_k * N + n * tc.tile_n) * bpe
-                    o_offset = (m * tc.tile_m * N + n * tc.tile_n) * acc_bytes
-
-                    schedule.append(
-                        TileOp(
-                            m_idx=m, n_idx=n, k_idx=k,
-                            tile_m=eff_m, tile_n=eff_n, tile_k=eff_k,
-                            load_weight=True,
-                            load_activation=is_first_m,
-                            store_output=is_last_k,
-                            accumulate=k > 0,
-                            weight_dram_offset=w_offset,
-                            activation_dram_offset=a_offset,
-                            output_dram_offset=o_offset,
-                        )
-                    )
-
-        return tc, schedule
-
-    def _schedule_is(
-        self, tc: TileConfig, M: int, N: int, K: int, bpe: int, acc_bytes: int
-    ) -> tuple[TileConfig, list[TileOp]]:
-        """IS: M -> K -> N loop.
-
-        A[M,K] (weight) is spatially mapped to PEs (SR=K, SC=M).
-        B[K,N] (activation) streams through along the temporal axis T=N.
+        W[M,K] (weight) stays in PEs across N iterations.
+        A[K,N] (activation) streams through along the temporal axis T=N.
         Partial sums for different K-tiles at the same (m,n) are accumulated.
         """
         schedule: list[TileOp] = []
@@ -183,6 +142,47 @@ class StationaryDataflow:
                             tile_m=eff_m, tile_n=eff_n, tile_k=eff_k,
                             load_weight=is_first_n,
                             load_activation=True,
+                            store_output=is_last_k,
+                            accumulate=k > 0,
+                            weight_dram_offset=w_offset,
+                            activation_dram_offset=a_offset,
+                            output_dram_offset=o_offset,
+                        )
+                    )
+
+        return tc, schedule
+
+    def _schedule_is(
+        self, tc: TileConfig, M: int, N: int, K: int, bpe: int, acc_bytes: int
+    ) -> tuple[TileConfig, list[TileOp]]:
+        """IS: K -> N -> M loop.
+
+        A[K,N] (activation) stays in PEs across M iterations.
+        W[M,K] (weight) streams through along the temporal axis T=M.
+        Partial sums for different K-tiles at the same (m,n) are accumulated.
+        """
+        schedule: list[TileOp] = []
+
+        for k in range(tc.num_k_tiles):
+            eff_k = min(tc.tile_k, K - k * tc.tile_k)
+            for n in range(tc.num_n_tiles):
+                eff_n = min(tc.tile_n, N - n * tc.tile_n)
+                for m in range(tc.num_m_tiles):
+                    eff_m = min(tc.tile_m, M - m * tc.tile_m)
+
+                    is_first_m = m == 0
+                    is_last_k = k == tc.num_k_tiles - 1
+
+                    w_offset = (m * tc.tile_m * K + k * tc.tile_k) * bpe
+                    a_offset = (k * tc.tile_k * N + n * tc.tile_n) * bpe
+                    o_offset = (m * tc.tile_m * N + n * tc.tile_n) * acc_bytes
+
+                    schedule.append(
+                        TileOp(
+                            m_idx=m, n_idx=n, k_idx=k,
+                            tile_m=eff_m, tile_n=eff_n, tile_k=eff_k,
+                            load_weight=True,
+                            load_activation=is_first_m,
                             store_output=is_last_k,
                             accumulate=k > 0,
                             weight_dram_offset=w_offset,

@@ -101,22 +101,22 @@ def test_dram_traffic_estimate():
 
 # --- Dataflow-specific tiling tests ---
 
-def test_ws_tile_k_maps_to_rows():
-    """In WS, tile_k should be clipped to array_rows."""
+def test_ws_tile_m_k_maps_to_array():
+    """In WS, W[m,k] stationary: tile_m <= rows, tile_k <= cols, tile_n is free."""
     tiler = make_tiler(array_rows=32, array_cols=32, sram_kb=512)
     tc = tiler.compute_tiles(M=256, N=256, K=256, dataflow="WS")
 
+    assert tc.tile_m <= 32
     assert tc.tile_k <= 32
-    assert tc.tile_n <= 32
 
 
-def test_is_tile_k_maps_to_rows():
-    """In IS, tile_k should be clipped to array_rows."""
+def test_is_tile_k_n_maps_to_array():
+    """In IS, A[k,n] stationary: tile_k <= rows, tile_n <= cols, tile_m is free."""
     tiler = make_tiler(array_rows=32, array_cols=32, sram_kb=512)
     tc = tiler.compute_tiles(M=256, N=256, K=256, dataflow="IS")
 
     assert tc.tile_k <= 32
-    assert tc.tile_m <= 32
+    assert tc.tile_n <= 32
 
 
 def test_os_tile_m_n_maps_to_array():

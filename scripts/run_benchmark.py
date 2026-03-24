@@ -254,11 +254,11 @@ def main():
     group_k_scaling(out, cache)
 
     # Save files
-    out_dir = _root / "reports" / "results"
+    out_dir = _root / "reports" / "benchmark"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Save txt (human-readable)
-    txt_file = out_dir / f"{file_ts}_benchmark.txt"
+    txt_file = out_dir / f"{file_ts}_hbm2.txt"
     with open(txt_file, "w") as f:
         f.write("\n".join(out) + "\n")
 
@@ -269,7 +269,7 @@ def main():
             "config": {"M": M, "N": N, "K": K, "dataflow": df, "db": db},
             "result": data,
         })
-    json_file = out_dir / f"{file_ts}_benchmark.json"
+    json_file = out_dir / f"{file_ts}_hbm2.json"
     with open(json_file, "w") as f:
         json.dump(all_results, f, indent=2)
 

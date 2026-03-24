@@ -94,20 +94,22 @@ def create_buffer_partitions(
 
 def create_gptvq_buffer_partitions(
     sram: BankedSRAM,
-    codebook_fraction: float = 0.05,
-    index_fraction: float = 0.20,
+    codebook_fraction: float = 0.10,
+    index_fraction: float = 0.05,
     scale_fraction: float = 0.05,
+    dequant_weight_fraction: float = 0.25,
     activation_fraction: float = 0.35,
-    output_fraction: float = 0.35,
+    output_fraction: float = 0.20,
     double_buffer: bool = True,
     use_scaling: bool = False,
 ) -> dict[str, list[SRAMBuffer]]:
     """Create GPTVQ buffer partitions within the SRAM.
 
-    Partitions into 5 regions: codebook, index, scale, activation, output.
-    When scaling is disabled, scale buffer space is redistributed to index and activation.
+    Partitions into 6 regions: codebook, index, scale, dequant_weight, activation, output.
+    - dequant_weight: holds dequantized weight tile (tile_m × tile_k × entry_bytes)
+    - When scaling is disabled, scale buffer space is redistributed to index and activation.
 
-    With double buffering: index, scale, activation get 2 slots each.
+    With double buffering: index, scale, dequant_weight, activation get 2 slots each.
     Codebook and output are single-slot.
     """
     total = sram.size_bytes
@@ -121,8 +123,9 @@ def create_gptvq_buffer_partitions(
     codebook_size = int(total * codebook_fraction)
     index_size = int(total * index_fraction)
     scale_size = int(total * scale_fraction)
+    dequant_weight_size = int(total * dequant_weight_fraction)
     act_size = int(total * activation_fraction)
-    output_size = total - codebook_size - index_size - scale_size - act_size
+    output_size = total - codebook_size - index_size - scale_size - dequant_weight_size - act_size
 
     buffers: dict[str, list[SRAMBuffer]] = {}
     addr = 0
@@ -148,6 +151,13 @@ def create_gptvq_buffer_partitions(
             buffers["scale"] = [SRAMBuffer(sram, addr, 0, "scale_none")]
         addr += scale_size
 
+        slot_dq = dequant_weight_size // 2
+        buffers["dequant_weight"] = [
+            SRAMBuffer(sram, addr, slot_dq, "dequant_weight_A"),
+            SRAMBuffer(sram, addr + slot_dq, slot_dq, "dequant_weight_B"),
+        ]
+        addr += dequant_weight_size
+
         slot_act = act_size // 2
         buffers["activation"] = [
             SRAMBuffer(sram, addr, slot_act, "activation_A"),
@@ -163,6 +173,9 @@ def create_gptvq_buffer_partitions(
         else:
             buffers["scale"] = [SRAMBuffer(sram, addr, 0, "scale_none")]
         addr += scale_size
+
+        buffers["dequant_weight"] = [SRAMBuffer(sram, addr, dequant_weight_size, "dequant_weight")]
+        addr += dequant_weight_size
 
         buffers["activation"] = [SRAMBuffer(sram, addr, act_size, "activation")]
         addr += act_size

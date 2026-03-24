@@ -58,8 +58,8 @@ class Tiler:
 
         Dataflow determines which dimensions map to array rows/cols:
           OS: tile_m <= rows, tile_n <= cols, maximize tile_k
-          WS: tile_k <= rows, tile_n <= cols, maximize tile_m
-          IS: tile_k <= rows, tile_m <= cols, maximize tile_n
+          WS: tile_m <= rows, tile_k <= cols, maximize tile_n  (weight W[m,k] stationary)
+          IS: tile_k <= rows, tile_n <= cols, maximize tile_m  (activation A[k,n] stationary)
 
         Double buffering halves the per-slot budget for weight+activation.
         """
@@ -70,25 +70,25 @@ class Tiler:
         out_budget = self.out_buf_size
 
         if dataflow == "WS":
+            # W[m,k] stationary: tile_m, tile_k fixed to array; maximize tile_n
+            tile_m = min(M, self.array_rows)
+            tile_k = min(K, self.array_cols)
+            max_mn_output = out_budget // self.acc_bytes if self.acc_bytes > 0 else 1
+            max_n_weight = weight_budget // (tile_m * self.bytes_per_elem) if tile_m > 0 else N
+            max_n_act = act_budget // (tile_k * self.bytes_per_elem) if tile_k > 0 else N
+            max_n_out = max_mn_output // tile_m if tile_m > 0 else N
+            tile_n = min(N, max_n_weight, max_n_act, max_n_out)
+            tile_n = max(1, tile_n)
+        elif dataflow == "IS":
+            # A[k,n] stationary: tile_k, tile_n fixed to array; maximize tile_m
             tile_k = min(K, self.array_rows)
             tile_n = min(N, self.array_cols)
             max_mn_output = out_budget // self.acc_bytes if self.acc_bytes > 0 else 1
-            # tile_m is the "free" dimension; maximize within SRAM
             max_m_weight = weight_budget // (tile_k * self.bytes_per_elem) if tile_k > 0 else M
             max_m_act = act_budget // (tile_n * self.bytes_per_elem) if tile_n > 0 else M
             max_m_out = max_mn_output // tile_n if tile_n > 0 else M
             tile_m = min(M, max_m_weight, max_m_act, max_m_out)
             tile_m = max(1, tile_m)
-        elif dataflow == "IS":
-            tile_k = min(K, self.array_rows)
-            tile_m = min(M, self.array_cols)
-            max_mn_output = out_budget // self.acc_bytes if self.acc_bytes > 0 else 1
-            # tile_n is the "free" dimension; maximize within SRAM
-            max_n_weight = weight_budget // (tile_k * self.bytes_per_elem) if tile_k > 0 else N
-            max_n_act = act_budget // (tile_m * self.bytes_per_elem) if tile_m > 0 else N
-            max_n_out = max_mn_output // tile_m if tile_m > 0 else N
-            tile_n = min(N, max_n_weight, max_n_act, max_n_out)
-            tile_n = max(1, tile_n)
         else:  # OS
             tile_m = min(M, self.array_rows)
             tile_n = min(N, self.array_cols)
@@ -122,15 +122,15 @@ class Tiler:
         total_tiles = tc.num_m_tiles * tc.num_n_tiles * tc.num_k_tiles
 
         if dataflow == "WS":
-            # Weight loaded once per (k,n) pair (first m); activation every tile
-            weight_loads = tc.num_k_tiles * tc.num_n_tiles
+            # Weight W[m,k] loaded once per (m,k) pair; activation every tile
+            weight_loads = tc.num_m_tiles * tc.num_k_tiles
             act_loads = total_tiles
-            output_writes = total_tiles
+            output_writes = tc.num_m_tiles * tc.num_n_tiles
         elif dataflow == "IS":
-            # Activation loaded once per (m,k) pair (first n); weight every tile
+            # Activation A[k,n] loaded once per (k,n) pair; weight every tile
             weight_loads = total_tiles
-            act_loads = tc.num_m_tiles * tc.num_k_tiles
-            output_writes = total_tiles
+            act_loads = tc.num_k_tiles * tc.num_n_tiles
+            output_writes = tc.num_m_tiles * tc.num_n_tiles
         else:  # OS
             # Weight & activation loaded every tile; output once per (m,n)
             weight_loads = total_tiles

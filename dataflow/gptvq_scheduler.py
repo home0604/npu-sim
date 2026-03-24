@@ -48,6 +48,7 @@ class GPTVQScheduler:
         codebook_bufs: list[SRAMBuffer],
         index_bufs: list[SRAMBuffer],
         scale_bufs: list[SRAMBuffer],
+        dequant_weight_bufs: list[SRAMBuffer],
         act_bufs: list[SRAMBuffer],
         output_buf: SRAMBuffer,
         stats: SimStats,
@@ -56,8 +57,10 @@ class GPTVQScheduler:
         scale_base_dram: int = 0,
         act_base_dram: int = 0,
         output_base_dram: int = 0,
+        dataflow: str = "OS",
     ):
         self.engine = engine
+        self.dataflow = dataflow
         self.systolic = systolic
         self.dequant_unit = dequant_unit
         self.mem_ctrl = mem_ctrl
@@ -65,6 +68,7 @@ class GPTVQScheduler:
         self.codebook_bufs = codebook_bufs
         self.index_bufs = index_bufs
         self.scale_bufs = scale_bufs
+        self.dequant_weight_bufs = dequant_weight_bufs
         self.act_bufs = act_bufs
         self.output_buf = output_buf
         self.stats = stats
@@ -92,18 +96,28 @@ class GPTVQScheduler:
         first_tile = tiles.popleft()
         slot_idx = self.double_buf.compute_slot.value
 
-        load_done, dequant_done = self._load_and_dequant(first_tile, slot_idx, cycle)
-        act_done = self._load_activation(first_tile, slot_idx, load_done)
-        data_ready_cycle = act_done  # weight → act sequential
+        if first_tile.load_indices:
+            load_done, dequant_done = self._load_and_dequant(first_tile, slot_idx, cycle)
+        else:
+            load_done = dequant_done = cycle  # reuse dequant_weight buffer
+
+        # Activation DRAM load starts at load_done (parallel with dequant)
+        if first_tile.load_activation:
+            act_done = self._load_activation(first_tile, slot_idx, load_done)
+        else:
+            act_done = load_done  # reuse activation buffer
+
+        data_ready_cycle = max(dequant_done, act_done)
 
         # Compute first tile (OS dataflow)
         cycles_info = self.systolic.analytical_cycles(
             first_tile.tile_m, first_tile.tile_n, first_tile.tile_k,
-            dataflow="OS",
+            dataflow=self.dataflow,
         )
         compute_done_cycle = data_ready_cycle + cycles_info.total_cycles
         self._update_compute_stats(first_tile, cycles_info)
-        self._update_dequant_stats(first_tile, dequant_done - load_done)
+        if first_tile.load_indices:
+            self._update_dequant_stats(first_tile, dequant_done - load_done)
 
         if first_tile.store_output:
             compute_done_cycle = self._store_output(first_tile, compute_done_cycle)
@@ -117,11 +131,21 @@ class GPTVQScheduler:
 
             prefetch_start = data_ready_cycle
 
-            load_done, dequant_done = self._load_and_dequant(
-                current_tile, next_slot_idx, prefetch_start
-            )
-            act_done = self._load_activation(current_tile, next_slot_idx, dequant_done)
-            next_data_ready = act_done  # weight → act sequential
+            if current_tile.load_indices:
+                load_done, dequant_done = self._load_and_dequant(
+                    current_tile, next_slot_idx, prefetch_start
+                )
+            else:
+                load_done = dequant_done = prefetch_start  # reuse dequant_weight buffer
+
+            # Activation DRAM load starts at load_done (parallel with dequant):
+            # dequant is SRAM-internal so the DRAM bus is free during dequant.
+            if current_tile.load_activation:
+                act_done = self._load_activation(current_tile, next_slot_idx, load_done)
+            else:
+                act_done = load_done  # reuse activation buffer
+
+            next_data_ready = max(dequant_done, act_done)
 
             compute_start = max(prev_compute_done, next_data_ready)
 
@@ -137,13 +161,14 @@ class GPTVQScheduler:
 
             cycles_info = self.systolic.analytical_cycles(
                 current_tile.tile_m, current_tile.tile_n, current_tile.tile_k,
-                dataflow="OS",
+                dataflow=self.dataflow,
             )
             compute_done = compute_start + cycles_info.total_cycles
             self._update_compute_stats(current_tile, cycles_info)
-            self._update_dequant_stats(
-                current_tile, dequant_done - max(load_done, prefetch_start)
-            )
+            if current_tile.load_indices:
+                self._update_dequant_stats(
+                    current_tile, dequant_done - max(load_done, prefetch_start)
+                )
 
             if current_tile.store_output:
                 compute_done = self._store_output(current_tile, compute_done)
@@ -159,17 +184,26 @@ class GPTVQScheduler:
     def _execute_single_buffer(self, tiles: deque[GPTVQTileOp], cycle: int) -> int:
         """Sequential execution without double buffering."""
         for tile in tiles:
-            load_done, dequant_done = self._load_and_dequant(tile, 0, cycle)
-            act_done = self._load_activation(tile, 0, dequant_done)
-            data_ready_cycle = act_done  # weight → act sequential
+            if tile.load_indices:
+                load_done, dequant_done = self._load_and_dequant(tile, 0, cycle)
+            else:
+                load_done = dequant_done = cycle
+
+            if tile.load_activation:
+                act_done = self._load_activation(tile, 0, load_done)
+            else:
+                act_done = load_done
+
+            data_ready_cycle = max(dequant_done, act_done)
 
             cycles_info = self.systolic.analytical_cycles(
                 tile.tile_m, tile.tile_n, tile.tile_k,
-                dataflow="OS",
+                dataflow=self.dataflow,
             )
             compute_done = data_ready_cycle + cycles_info.total_cycles
             self._update_compute_stats(tile, cycles_info)
-            self._update_dequant_stats(tile, dequant_done - load_done)
+            if tile.load_indices:
+                self._update_dequant_stats(tile, dequant_done - load_done)
 
             if tile.store_output:
                 compute_done = self._store_output(tile, compute_done)
@@ -201,7 +235,13 @@ class GPTVQScheduler:
         dequant_cycles = self.dequant_unit.dequant_cycles(tile.tile_m, tile.tile_k)
         dequant_done = load_done + dequant_cycles
 
-        return load_done, dequant_done
+        # Write dequantized weights to SRAM (pipelined with dequant, completes at dequant_done)
+        dq_buf = self.dequant_weight_bufs[min(slot_idx, len(self.dequant_weight_bufs) - 1)]
+        dq_size_bytes = tile.tile_m * tile.tile_k * self.dequant_unit.config.codebook_entry_bytes
+        write_done = dq_buf.write(0, dq_size_bytes, dequant_done)
+        self.stats.memory.sram_write_cycles += write_done - dequant_done
+
+        return load_done, write_done
 
     def _load_codebook(self, tile: GPTVQTileOp, cycle: int) -> int:
         """Load codebook from DRAM to SRAM."""

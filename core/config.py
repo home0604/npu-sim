@@ -40,9 +40,10 @@ class SRAMConfig:
     activation_buffer_fraction: float = 0.3
     output_buffer_fraction: float = 0.3
     # GPTVQ buffer fractions (used when gptvq.enabled is True)
-    codebook_buffer_fraction: float = 0.05
-    index_buffer_fraction: float = 0.20
+    codebook_buffer_fraction: float = 0.10
+    index_buffer_fraction: float = 0.05
     scale_buffer_fraction: float = 0.05
+    dequant_weight_buffer_fraction: float = 0.25
 
 
 @dataclass

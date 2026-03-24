@@ -78,9 +78,8 @@ class GPTVQTiler:
             self.codebook_buf_size = int(self.sram_size * sram_config.codebook_buffer_fraction)
             self.index_buf_size = int(self.sram_size * sram_config.index_buffer_fraction)
             self.scale_buf_size = int(self.sram_size * sram_config.scale_buffer_fraction)
-            self.act_buf_size = int(
-                self.sram_size * sram_config.activation_buffer_fraction
-            )
+            self.dequant_weight_buf_size = int(self.sram_size * sram_config.dequant_weight_buffer_fraction)
+            self.act_buf_size = int(self.sram_size * sram_config.activation_buffer_fraction)
         else:
             extra = sram_config.scale_buffer_fraction / 2
             self.codebook_buf_size = int(self.sram_size * sram_config.codebook_buffer_fraction)
@@ -88,6 +87,7 @@ class GPTVQTiler:
                 self.sram_size * (sram_config.index_buffer_fraction + extra)
             )
             self.scale_buf_size = 0
+            self.dequant_weight_buf_size = int(self.sram_size * sram_config.dequant_weight_buffer_fraction)
             self.act_buf_size = int(
                 self.sram_size * (sram_config.activation_buffer_fraction + extra)
             )
@@ -97,6 +97,7 @@ class GPTVQTiler:
             - self.codebook_buf_size
             - self.index_buf_size
             - self.scale_buf_size
+            - self.dequant_weight_buf_size
             - self.act_buf_size
         )
 
@@ -149,7 +150,14 @@ class GPTVQTiler:
         else:
             max_k_scale = K
 
-        tile_k = min(K, max_k_index, max_k_act, max_k_scale)
+        # Max tile_k from dequant_weight buffer (tile_m × tile_k × entry_bytes)
+        dq_budget = self.dequant_weight_buf_size // db_factor
+        if tile_m > 0 and self.codebook_entry_bytes > 0:
+            max_k_dequant = dq_budget // (tile_m * self.codebook_entry_bytes)
+        else:
+            max_k_dequant = K
+
+        tile_k = min(K, max_k_index, max_k_act, max_k_scale, max_k_dequant)
         tile_k = max(d, (tile_k // d) * d)
         tile_k = min(tile_k, K)
         if tile_k < d:

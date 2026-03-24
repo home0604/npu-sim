@@ -16,16 +16,9 @@ sram:
   port_type: dual
   read_latency_cycles: 1
   write_latency_cycles: 1
-  # Standard buffer fractions (used when gptvq disabled)
   weight_buffer_fraction: 0.4
   activation_buffer_fraction: 0.3
   output_buffer_fraction: 0.3
-  # GPTVQ buffer fractions (used when gptvq enabled)
-  codebook_buffer_fraction: 0.05
-  index_buffer_fraction: 0.20
-  scale_buffer_fraction: 0.05
-  gptvq_activation_buffer_fraction: 0.35
-  gptvq_output_buffer_fraction: 0.35
 
 dram:
   use_dramsim3: true
