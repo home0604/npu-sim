@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dequantization cycle sweep: bank-aware read latency across vector_dim and num_stages."""
+"""Dequantization cycle sweep: bank-aware read latency across vec_dim, stages, cb_banks, bank_width."""
 
 import sys
 from pathlib import Path
@@ -13,8 +13,10 @@ from core.config import load_config
 # ---------------------------------------------------------------------------
 # Sweep parameters
 # ---------------------------------------------------------------------------
-VECTOR_DIMS = [32, 64, 128, 512, 1024]
-NUM_STAGES  = [1, 2, 4]
+VECTOR_DIMS    = [2, 4, 8]      # d: codebook vector dimension
+NUM_STAGES     = [1, 2, 4]      # S: RVQ stages
+CODEBOOK_BANKS = [4, 16, 32]    # N_bank: codebook SRAM banks
+BANK_WIDTHS    = [8, 32, 64]    # w_b: bytes per bank per cycle
 
 # Tile size for cycle estimation
 TILE_M = 32
@@ -25,32 +27,41 @@ def main():
     config = load_config(_root / "configs" / "gptvq.yaml")
     sram = config.sram
 
-    print(f"SRAM: {sram.num_banks} banks × {sram.bank_width_bytes}B = "
-          f"{sram.num_banks * sram.bank_width_bytes * 8} bits total bandwidth/cycle")
     print(f"Tile: M={TILE_M}, K={TILE_K}\n")
 
-    # Header
-    col_w = [12, 12, 16, 16, 18]
-    headers = ["vector_dim", "stages (S)", "read_latency", "num_vectors", "dequant_cycles"]
-    header = "".join(h.rjust(w) for h, w in zip(headers, col_w))
-    sep = "-" * sum(col_w)
-    print(header)
-    print(sep)
+    col_w = [12, 12, 18, 14, 14]
+    headers = ["vec_dim (d)", "stages (S)", "cyc/lookup", "num_lookups", "total_cycles"]
+    header = "  " + "".join(h.rjust(w) for h, w in zip(headers, col_w))
+    sep    = "  " + "-" * sum(col_w)
 
-    for S in NUM_STAGES:
-        for d in VECTOR_DIMS:
-            config.gptvq.vector_dim = d
-            config.gptvq.num_stages = S
+    for bw in BANK_WIDTHS:
+        sram.bank_width_bytes = bw
+        print(f"bank_width = {bw}B")
 
-            unit = DequantizationUnit(config.gptvq, sram)
-            read_latency = unit._read_latency_per_lookup()
-            num_vectors = TILE_M * -(-TILE_K // d)  # ceil division
-            cycles = unit.dequant_cycles(TILE_M, TILE_K)
+        for n_banks in CODEBOOK_BANKS:
+            sram.codebook_sram.num_banks = n_banks
+            bw_bits = n_banks * bw * 8
+            print(f"  cb_banks = {n_banks:2d}  ({bw_bits:5d} bits/cycle)")
+            print(header)
+            print(sep)
 
-            row = [str(d), str(S), f"{read_latency} cyc", str(num_vectors), str(cycles)]
-            print("".join(v.rjust(w) for v, w in zip(row, col_w)))
+            for S in NUM_STAGES:
+                for d in VECTOR_DIMS:
+                    config.gptvq.vector_dim = d
+                    config.gptvq.num_stages = S
 
-        print(sep)
+                    unit = DequantizationUnit(config.gptvq, sram)
+                    latency   = unit._latency_per_lookup()
+                    num_lookups  = TILE_M * -(-TILE_K // d)
+                    cycles       = unit.dequant_cycles(TILE_M, TILE_K)
+
+                    row = [str(d), str(S), str(latency), str(num_lookups), str(cycles)]
+                    print("  " + "".join(v.rjust(w) for v, w in zip(row, col_w)))
+
+                if S != NUM_STAGES[-1]:
+                    print()
+
+            print()
 
 
 if __name__ == "__main__":

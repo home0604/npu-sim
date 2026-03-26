@@ -24,8 +24,8 @@ from memory.dram_interface import (
 )
 from memory.double_buffer import DoubleBufferController
 from memory.memory_controller import MemoryController
-from memory.sram import BankedSRAM, PortType
-from memory.sram_buffers import SRAMBuffer, create_buffer_partitions, create_gptvq_buffer_partitions
+from memory.sram import PortType
+from memory.sram_buffers import SRAMBuffer, collect_srams, create_buffer_partitions, create_gptvq_buffer_partitions
 from sim.functional_check import (
     compare_outputs,
     compute_diff_report,
@@ -72,20 +72,20 @@ class NPUSimulator:
             acc_dtype=self.acc_dtype,
         )
 
-        # SRAM
-        port_type = PortType.DUAL if config.sram.port_type.lower() == "dual" else PortType.SINGLE
-        self.sram = BankedSRAM(
-            size_bytes=config.sram.total_size_kb * 1024,
+        # SRAM config (shared by all buffer groups)
+        self._sram_port_type = PortType.DUAL if config.sram.port_type.lower() == "dual" else PortType.SINGLE
+        self._sram_params = dict(
+            total_size_bytes=config.sram.total_size_kb * 1024,
             num_banks=config.sram.num_banks,
             bank_width_bytes=config.sram.bank_width_bytes,
-            port_type=port_type,
+            port_type=self._sram_port_type,
             read_latency=config.sram.read_latency_cycles,
             write_latency=config.sram.write_latency_cycles,
         )
 
-        # Buffer partitions
+        # Buffer partitions (each group gets its own BankedSRAM instance)
         self.buffers = create_buffer_partitions(
-            self.sram,
+            **self._sram_params,
             weight_fraction=config.sram.weight_buffer_fraction,
             activation_fraction=config.sram.activation_buffer_fraction,
             output_fraction=config.sram.output_buffer_fraction,
@@ -128,8 +128,8 @@ class NPUSimulator:
                 clock_freq_mhz=config.systolic.clock_freq_mhz,
             )
 
-        # Memory controller
-        self.mem_ctrl = MemoryController(self.dram, self.sram, self.engine)
+        # Memory controller (no shared SRAM — each SRAMBuffer owns its BankedSRAM)
+        self.mem_ctrl = MemoryController(self.dram, self.engine)
 
         # Tiler
         self.tiler = Tiler(
@@ -185,7 +185,7 @@ class NPUSimulator:
         self.dequant_unit = DequantizationUnit(cfg.gptvq, cfg.sram)
 
         self.gptvq_buffers = create_gptvq_buffer_partitions(
-            self.sram,
+            **self._sram_params,
             codebook_fraction=cfg.sram.codebook_buffer_fraction,
             index_fraction=cfg.sram.index_buffer_fraction,
             scale_fraction=cfg.sram.scale_buffer_fraction,
@@ -194,6 +194,12 @@ class NPUSimulator:
             output_fraction=cfg.sram.output_buffer_fraction,
             double_buffer=cfg.double_buffer.enabled,
             use_scaling=cfg.gptvq.use_scaling,
+            codebook_num_banks=cfg.sram.codebook_sram.num_banks,
+            codebook_port_type=(
+                PortType.DUAL if cfg.sram.codebook_sram.port_type.lower() == "dual"
+                else PortType.SINGLE if cfg.sram.codebook_sram.port_type.lower() == "single"
+                else None
+            ),
         )
 
         self.gptvq_tiler = GPTVQTiler(
@@ -727,9 +733,17 @@ class NPUSimulator:
         dataflow_fp32 = StationaryDataflow(tiler_fp32, dataflow=self.config.systolic.dataflow)
         return dataflow_fp32, tiler_fp32, systolic_fp32
 
+    def _get_all_srams(self):
+        """Collect unique BankedSRAM instances from all buffer dicts."""
+        srams = collect_srams(self.buffers)
+        if self.gptvq_enabled and hasattr(self, "gptvq_buffers"):
+            srams.extend(collect_srams(self.gptvq_buffers))
+        return srams
+
     def _reset_for_layer(self) -> None:
         """Reset SRAM bank tracking between layers (new data layout)."""
-        self.sram.reset_busy()
+        for sram in self._get_all_srams():
+            sram.reset_busy()
         self.double_buf.reset()
         if hasattr(self.dram, "_bus_free_cycle"):
             self.dram._bus_free_cycle = self.engine.current_cycle
@@ -737,8 +751,9 @@ class NPUSimulator:
     def reset(self) -> None:
         """Full reset of the simulator."""
         self.engine.reset()
-        self.sram.reset_busy()
-        self.sram.reset_stats()
+        for sram in self._get_all_srams():
+            sram.reset_busy()
+            sram.reset_stats()
         self.dram.reset()
         self.double_buf.reset()
         self.stats = SimStats(

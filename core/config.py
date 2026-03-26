@@ -29,6 +29,13 @@ class DataTypeConfig:
 
 
 @dataclass
+class CodebookSRAMConfig:
+    """Codebook SRAM overrides. 0 or "" means use the global SRAMConfig value."""
+    num_banks: int = 0
+    port_type: str = ""  # "" = use global
+
+
+@dataclass
 class SRAMConfig:
     total_size_kb: int = 512
     num_banks: int = 32
@@ -44,6 +51,8 @@ class SRAMConfig:
     index_buffer_fraction: float = 0.05
     scale_buffer_fraction: float = 0.05
     dequant_weight_buffer_fraction: float = 0.25
+    # Codebook SRAM overrides (unset fields fall back to global values)
+    codebook_sram: CodebookSRAMConfig = field(default_factory=lambda: CodebookSRAMConfig())
 
 
 @dataclass

@@ -235,13 +235,9 @@ class GPTVQScheduler:
         dequant_cycles = self.dequant_unit.dequant_cycles(tile.tile_m, tile.tile_k)
         dequant_done = load_done + dequant_cycles
 
-        # Write dequantized weights to SRAM (pipelined with dequant, completes at dequant_done)
-        dq_buf = self.dequant_weight_bufs[min(slot_idx, len(self.dequant_weight_bufs) - 1)]
-        dq_size_bytes = tile.tile_m * tile.tile_k * self.dequant_unit.config.codebook_entry_bytes
-        write_done = dq_buf.write(0, dq_size_bytes, dequant_done)
-        self.stats.memory.sram_write_cycles += write_done - dequant_done
-
-        return load_done, write_done
+        # Write to dequant_weight buffer is pipelined with dequant:
+        # codebook read and weight write happen together per vector, no extra cycles.
+        return load_done, dequant_done
 
     def _load_codebook(self, tile: GPTVQTileOp, cycle: int) -> int:
         """Load codebook from DRAM to SRAM."""
@@ -251,7 +247,7 @@ class GPTVQScheduler:
         size_bytes = self.dequant_unit.codebook_size * d * self.dequant_unit.config.codebook_entry_bytes
 
         result = self.mem_ctrl.load_from_dram(
-            dram_addr, sram_buf.base_addr, size_bytes, cycle, "codebook"
+            dram_addr, sram_buf, size_bytes, cycle, "codebook"
         )
         self.stats.memory.dram_read_bytes += size_bytes
         self.stats.memory.dram_read_count += 1
@@ -269,7 +265,7 @@ class GPTVQScheduler:
         size_bytes = tile.tile_m * num_groups * self.dequant_unit.config.index_elem_bytes
 
         result = self.mem_ctrl.load_from_dram(
-            dram_addr, sram_buf.base_addr, size_bytes, cycle, "index"
+            dram_addr, sram_buf, size_bytes, cycle, "index"
         )
         self.stats.memory.dram_read_bytes += size_bytes
         self.stats.memory.dram_read_count += 1
@@ -292,7 +288,7 @@ class GPTVQScheduler:
             return cycle
 
         result = self.mem_ctrl.load_from_dram(
-            dram_addr, sram_buf.base_addr, size_bytes, cycle, "scale"
+            dram_addr, sram_buf, size_bytes, cycle, "scale"
         )
         self.stats.memory.dram_read_bytes += size_bytes
         self.stats.memory.dram_read_count += 1
@@ -308,7 +304,7 @@ class GPTVQScheduler:
         size_bytes = tile.tile_k * tile.tile_n * self.systolic.dtype.num_bytes
 
         result = self.mem_ctrl.load_from_dram(
-            dram_addr, sram_buf.base_addr, size_bytes, cycle, "activation"
+            dram_addr, sram_buf, size_bytes, cycle, "activation"
         )
         self.stats.memory.dram_read_bytes += size_bytes
         self.stats.memory.dram_read_count += 1
@@ -322,7 +318,7 @@ class GPTVQScheduler:
         size_bytes = tile.tile_m * tile.tile_n * self.systolic.acc_dtype.num_bytes
 
         result = self.mem_ctrl.store_to_dram(
-            self.output_buf.base_addr, dram_addr, size_bytes, cycle, "output"
+            self.output_buf, dram_addr, size_bytes, cycle, "output"
         )
         self.stats.memory.dram_write_bytes += size_bytes
         self.stats.memory.dram_write_count += 1

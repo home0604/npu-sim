@@ -38,14 +38,18 @@ class DequantizationUnit:
     Performs codebook lookup and optional scale/zero-point application.
     Dequant cycles are derived from SRAM bank structure:
 
-        read_latency = ceil(E * S / (N_bank * w_b))  [cycles per lookup]
-        total = pipeline_stages + num_vectors * read_latency
+        read_lat  = ceil(E * S / (N_bank * w_b))  [cycles per lookup]
+        write_lat = SRAM write latency             [cycles per result write]
+        total = pipeline_stages + num_vectors * max(read_lat, write_lat)
 
     Where:
         E      = vector_dim * codebook_entry_bytes * 8  (bits per entry)
         S      = num_stages  (RVQ/AQ stages)
         N_bank = SRAM bank count
         w_b    = bank_width_bytes * 8  (bits per bank)
+
+    Read (codebook) and write (dequant_weight) use separate physical SRAMs,
+    so they pipeline: the latency bottleneck is max(read_lat, write_lat).
     """
 
     def __init__(self, config: GPTVQConfig, sram_config: SRAMConfig):
@@ -55,8 +59,11 @@ class DequantizationUnit:
         self.index_bits = config.index_bits
         self.use_scaling = config.use_scaling
         self.pipeline_stages = config.dequant_pipeline_stages
-        self.sram_n_banks = sram_config.num_banks
+        cb_banks = sram_config.codebook_sram.num_banks
+        self.sram_n_banks = cb_banks if cb_banks > 0 else sram_config.num_banks
         self.sram_bank_width_bytes = sram_config.bank_width_bytes
+        self.sram_read_latency = sram_config.read_latency_cycles
+        self.sram_write_latency = sram_config.write_latency_cycles
 
     def _read_latency_per_lookup(self) -> int:
         """Cycles to read one codebook entry using all SRAM banks in parallel.
@@ -70,6 +77,14 @@ class DequantizationUnit:
         w_b_bits = self.sram_bank_width_bytes * 8
         return max(1, math.ceil((E_bits * S) / (N_bank * w_b_bits)))
 
+    def _latency_per_lookup(self) -> int:
+        """Cycles per lookup in steady state (pipelined read + write).
+
+        Codebook read and dequant_weight write use separate SRAMs,
+        so they overlap: bottleneck = max(read_lat, write_lat).
+        """
+        return max(self._read_latency_per_lookup(), self.sram_write_latency)
+
     def dequant_cycles(self, tile_m: int, tile_k: int) -> int:
         """Analytical cycle count for dequantizing a weight tile.
 
@@ -78,12 +93,12 @@ class DequantizationUnit:
             tile_k: number of columns (must be multiple of vector_dim)
 
         Returns:
-            pipeline_stages + num_vectors * read_latency_per_lookup
+            pipeline_stages + num_lookups * max(read_lat, write_lat)
         """
         d = self.vector_dim
-        num_vectors = tile_m * math.ceil(tile_k / d)
-        read_latency = self._read_latency_per_lookup()
-        return self.pipeline_stages + num_vectors * read_latency
+        num_lookups = tile_m * math.ceil(tile_k / d)
+        latency = self._latency_per_lookup()
+        return self.pipeline_stages + num_lookups * latency
 
     def dequantize(
         self,

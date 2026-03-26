@@ -180,7 +180,7 @@ class TileScheduler:
         sram_buf = self.weight_bufs[slot_idx]
         size_bytes = tile.tile_m * tile.tile_k * self.systolic.dtype.num_bytes
 
-        result = self.mem_ctrl.load_from_dram(dram_addr, sram_buf.base_addr, size_bytes, cycle, "weight")
+        result = self.mem_ctrl.load_from_dram(dram_addr, sram_buf, size_bytes, cycle, "weight")
         self.stats.memory.dram_read_bytes += size_bytes
         self.stats.memory.dram_read_count += 1
         self.stats.memory.dram_read_cycles += result.dram_cycles
@@ -193,7 +193,7 @@ class TileScheduler:
         sram_buf = self.act_bufs[slot_idx]
         size_bytes = tile.tile_k * tile.tile_n * self.systolic.dtype.num_bytes
 
-        result = self.mem_ctrl.load_from_dram(dram_addr, sram_buf.base_addr, size_bytes, cycle, "activation")
+        result = self.mem_ctrl.load_from_dram(dram_addr, sram_buf, size_bytes, cycle, "activation")
         self.stats.memory.dram_read_bytes += size_bytes
         self.stats.memory.dram_read_count += 1
         self.stats.memory.dram_read_cycles += result.dram_cycles
@@ -205,7 +205,7 @@ class TileScheduler:
         dram_addr = self.output_base_dram + tile.output_dram_offset
         size_bytes = tile.tile_m * tile.tile_n * self.systolic.acc_dtype.num_bytes
 
-        result = self.mem_ctrl.store_to_dram(self.output_buf.base_addr, dram_addr, size_bytes, cycle, "output")
+        result = self.mem_ctrl.store_to_dram(self.output_buf, dram_addr, size_bytes, cycle, "output")
         self.stats.memory.dram_write_bytes += size_bytes
         self.stats.memory.dram_write_count += 1
         self.stats.memory.sram_read_cycles += result.sram_cycles

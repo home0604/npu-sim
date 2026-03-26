@@ -8,11 +8,15 @@ name: NPU-Sim-32x32-GPTVQ
 sram:
   # GPTVQ buffer fractions (standard fractions override)
   codebook_buffer_fraction: 0.10      # codebook: small but generous for large d
-  index_buffer_fraction: 0.1         # compressed indices: tiny (tile_m × tile_k/d × 1B)
+  index_buffer_fraction: 0.10         # compressed indices: tiny (tile_m × tile_k/d × 1B)
   scale_buffer_fraction: 0.05         # per-group scale/zero-point (optional)
   dequant_weight_buffer_fraction: 0.25  # dequantized weight tile (tile_m × tile_k × 2B)
   activation_buffer_fraction: 0.30    # activation tile (tile_k × tile_n × 2B)
   output_buffer_fraction: 0.20        # output tile (tile_m × tile_n × 4B)
+  # Codebook SRAM overrides (0/"" = use global value)
+  codebook_sram:
+    num_banks: 16       # 0 = use global num_banks
+    port_type: single      # "" = use global port_type
 
 gptvq:
   enabled: true
