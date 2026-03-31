@@ -1,4 +1,4 @@
-"""GPTVQ Dequantization Unit.
+"""VQ Dequantization Unit.
 
 Converts compressed weight representation (codebook + indices + optional scaling)
 into dequantized weight tiles for the systolic array.
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 import torch
 
-from core.config import GPTVQConfig, SRAMConfig
+from core.config import VQConfig, SRAMConfig
 
 
 @dataclass
@@ -33,7 +33,7 @@ class DequantResult:
 
 
 class DequantizationUnit:
-    """GPTVQ dequantization hardware unit model.
+    """VQ dequantization hardware unit model.
 
     Performs codebook lookup and optional scale/zero-point application.
     Dequant cycles are derived from SRAM bank structure:
@@ -52,7 +52,7 @@ class DequantizationUnit:
     so they pipeline: the latency bottleneck is max(read_lat, write_lat).
     """
 
-    def __init__(self, config: GPTVQConfig, sram_config: SRAMConfig):
+    def __init__(self, config: VQConfig, sram_config: SRAMConfig):
         self.config = config
         self.codebook_size = config.codebook_size
         self.vector_dim = config.vector_dim

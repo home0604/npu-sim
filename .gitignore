@@ -9,3 +9,4 @@ dist/
 *.json
 dramsim3_output/
 ext/DRAMsim3/
+reports/

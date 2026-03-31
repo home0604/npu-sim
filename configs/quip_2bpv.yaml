@@ -1,0 +1,33 @@
+# quip_2bpv.yaml - QuIP# 논문 2-bit config (E8P lattice)
+#
+# 논문 Section 3: E8P lattice codebook
+#   d=8, 16 bits per 8 weights = 2 bpv
+#   Codebook: 256-entry LUT x 8-dim, INT4 dtype = 1KB
+#   Encoding: 8-bit LUT index + 7-bit sign flips + 1-bit shift = 16 bits total
+#
+# 추론 시: LUT[idx] * signs * scale (1회 lookup + sign flip + scale)
+#   Codebook이 1KB로 극히 작아 register file 적재 가능
+extends: default.yaml
+
+name: QuIP#-E8P-2bpv
+
+sram:
+  codebook_buffer_fraction: 0.05      # 1KB codebook, 매우 작음
+  index_buffer_fraction: 0.10
+  scale_buffer_fraction: 0.05
+  dequant_weight_buffer_fraction: 0.30
+  activation_buffer_fraction: 0.30
+  output_buffer_fraction: 0.20
+  codebook_sram:
+    num_banks: 16
+    port_type: single
+
+vq:
+  enabled: true
+  codebook_size: 256           # |S|=256 (E8P LUT entries)
+  vector_dim: 8                # d=8 (E8 lattice dimension)
+  index_bits: 8                # 8 bits for LUT index (+ 8 bits sign/shift handled separately)
+  num_stages: 1                # single stage for 2-bit
+  use_scaling: false
+  codebook_dtype: INT4         # 논문: 4-bit integer LUT entries
+  dequant_pipeline_stages: 3

@@ -9,8 +9,8 @@ import torch
 from compute.dequant_unit import DequantizationUnit
 from compute.systolic_array import SystolicArray
 from core.datatypes import AccumulatorType, DataType
-from dataflow.gptvq_dataflow import GPTVQTileOp
-from dataflow.gptvq_tiler import GPTVQTileConfig
+from dataflow.vq_dataflow import VQTileOp
+from dataflow.vq_tiler import VQTileConfig
 from dataflow.tiler import TileConfig, Tiler
 from dataflow.stationary import StationaryDataflow, TileOp
 
@@ -297,9 +297,9 @@ def compare_outputs(
     return True, "Output matches reference (allclose, FP32)."
 
 
-def run_gptvq_schedule_functional(
-    schedule: list[GPTVQTileOp],
-    tile_config: GPTVQTileConfig,
+def run_vq_schedule_functional(
+    schedule: list[VQTileOp],
+    tile_config: VQTileConfig,
     codebook: torch.Tensor,
     indices: torch.Tensor,
     activation: torch.Tensor,
@@ -311,7 +311,7 @@ def run_gptvq_schedule_functional(
     scales: torch.Tensor | None = None,
     zero_points: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Execute GPTVQ schedule with real data for correctness checking.
+    """Execute VQ schedule with real data for correctness checking.
 
     Dequantizes weight tile-by-tile using codebook + indices (+ optional scaling),
     then computes matmul in same tile order as the cycle-accurate scheduler.

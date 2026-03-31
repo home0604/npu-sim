@@ -40,26 +40,32 @@ python3 scripts/run_sim.py --workload transformer --seq-len 512 --hidden-dim 768
 python3 scripts/run_sim.py --workload transformer --seq-len 128 --hidden-dim 768 --num-heads 12 --dataflow WS --use-db --json
 
 # -----------------------------------------------------------------------------
-# 2. GPTVQ 시뮬레이션
+# 2. VQ 시뮬레이션
 # -----------------------------------------------------------------------------
 
-# GPTVQ 기본 실행 (gptvq.yaml 사용)
-python3 scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256 --config configs/gptvq.yaml
+# VQ 기본 실행 (vq.yaml 사용)
+python3 scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256 --config configs/vq.yaml
 
-# GPTVQ + JSON 출력
-python3 scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256 --config configs/gptvq.yaml --json
+# VQ + JSON 출력
+python3 scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256 --config configs/vq.yaml --json
 
-# GPTVQ + Double Buffer
-python3 scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256 --config configs/gptvq.yaml --use-db
+# VQ + Double Buffer
+python3 scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256 --config configs/vq.yaml --use-db
 
-# Dequantization 사이클 파라미터 스윕 (vector_dim × num_stages)
+# VQ + Dataflow 지정
+python3 scripts/run_sim.py --workload matmul --M 256 --N 256 --K 256 --config configs/vq.yaml --dataflow WS
+
+# VQ 정합성 검증
+python3 scripts/run_sim.py --workload matmul --M 64 --N 64 --K 64 --config configs/vq.yaml --check-correctness
+
+# Dequantization 사이클 파라미터 스윕 (vec_dim × stages × cb_banks × bank_width)
 python3 scripts/run_dequant_sweep.py
 
 # -----------------------------------------------------------------------------
 # 3. 벤치마크 (run_benchmark.py)
 # -----------------------------------------------------------------------------
 
-# 전체 벤치마크 실행 (결과: reports/results/ 에 txt + json 저장)
+# 전체 벤치마크 실행 (결과: reports/benchmark/ 에 txt + json 저장)
 python3 scripts/run_benchmark.py
 
 # -----------------------------------------------------------------------------
@@ -74,6 +80,9 @@ pytest tests/test_e2e.py
 
 # 특정 테스트 케이스
 pytest tests/test_e2e.py::TestE2E::test_small_matmul -v
+
+# VQ 테스트
+pytest tests/test_vq.py -v
 
 # -----------------------------------------------------------------------------
 # 5. DRAMSim3 빌드 (최초 1회)

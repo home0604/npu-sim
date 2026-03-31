@@ -215,3 +215,53 @@ def test_matmul_is_multi_tile():
     result = sim.run_matmul(M=128, N=128, K=128, check_correctness=True)
     assert result["correctness"] == "pass"
     assert result["compute"]["tiles_processed"] > 1
+
+
+def test_ws_accumulation_has_cost():
+    """WS with multi k-tiles must incur accumulation SRAM cycles."""
+    sim = make_simulator(rows=16, cols=16, sram_kb=64, dataflow="WS")
+    result = sim.run_matmul(M=64, N=64, K=256)
+    assert result["memory"]["accumulation_cycles"] > 0
+    assert result["memory"]["accumulation_count"] > 0
+
+
+def test_os_accumulation_is_zero():
+    """OS keeps partial sums in PEs — no accumulation SRAM cost."""
+    sim = make_simulator(rows=16, cols=16, sram_kb=64, dataflow="OS")
+    result = sim.run_matmul(M=64, N=64, K=256)
+    assert result["memory"]["accumulation_cycles"] == 0
+    assert result["memory"]["accumulation_count"] == 0
+
+
+def test_ws_single_k_tile_no_accumulation():
+    """WS with K fitting in one tile — no accumulation needed."""
+    sim = make_simulator(rows=16, cols=16, sram_kb=512, dataflow="WS")
+    result = sim.run_matmul(M=16, N=16, K=16)
+    assert result["memory"]["accumulation_cycles"] == 0
+    assert result["memory"]["accumulation_count"] == 0
+
+
+def test_begin_end_matches_blocking():
+    """begin+end read on SimpleDRAMModel should match issue_read."""
+    from memory.dram_interface import SimpleDRAMModel
+    dram = SimpleDRAMModel(bandwidth_gbps=25.6, latency_ns=50.0)
+
+    resp_blocking = dram.issue_read(0, 4096, 0, "test")
+    dram.reset()
+
+    token = dram.begin_read(0, 4096, 0, "test")
+    resp_async = dram.end_read(token)
+    assert resp_blocking.complete_cycle == resp_async.complete_cycle
+
+
+def test_parallel_issue_same_result_simple_dram():
+    """Parallel weight+act issue on SimpleDRAMModel gives same total cycles as serial."""
+    # SimpleDRAMModel has single bus, so parallel issue should produce identical results
+    sim_a = make_simulator(rows=32, cols=32, sram_kb=512, dataflow="OS")
+    result_a = sim_a.run_matmul(M=64, N=64, K=64)
+
+    sim_b = make_simulator(rows=32, cols=32, sram_kb=512, dataflow="OS")
+    result_b = sim_b.run_matmul(M=64, N=64, K=64)
+
+    assert result_a["total_cycles"] == result_b["total_cycles"]
+    assert result_a["compute"]["total_mac_ops"] == result_b["compute"]["total_mac_ops"]

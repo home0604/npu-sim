@@ -1,12 +1,12 @@
-# gptvq.yaml - GPTVQ 실험용 config
-# default.yaml을 상속하고 GPTVQ 관련 설정만 override
+# vq.yaml - VQ 실험용 기본 config
+# default.yaml을 상속하고 VQ 관련 설정만 override
 
 extends: default.yaml
 
-name: NPU-Sim-32x32-GPTVQ
+name: VQ-Base
 
 sram:
-  # GPTVQ buffer fractions (standard fractions override)
+  # VQ buffer fractions (standard fractions override)
   codebook_buffer_fraction: 0.10      # codebook: small but generous for large d
   index_buffer_fraction: 0.10         # compressed indices: tiny (tile_m × tile_k/d × 1B)
   scale_buffer_fraction: 0.05         # per-group scale/zero-point (optional)
@@ -18,11 +18,11 @@ sram:
     num_banks: 16       # 0 = use global num_banks
     port_type: single      # "" = use global port_type
 
-gptvq:
+vq:
   enabled: true
-  codebook_size: 16           # R: centroid 수 (index_bits=4 → 2^4=16)
-  vector_dim: 2               # d: codebook vector 차원
-  index_bits: 4               # bits per index = log2(codebook_size)
+  codebook_size: 256           # R: centroid 수 (index_bits=4 → 2^4=16)
+  vector_dim: 16               # d: codebook vector 차원
+  index_bits: 8               # bits per index = log2(codebook_size)
   num_stages: 1               # S: RVQ/AQ stage 수 (standard VQ = 1)
   use_scaling: false          # per-group scaling: s * codebook[idx] + z
   scale_dtype: FP16

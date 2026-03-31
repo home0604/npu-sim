@@ -120,7 +120,7 @@ def create_buffer_partitions(
     return buffers
 
 
-def create_gptvq_buffer_partitions(
+def create_vq_buffer_partitions(
     total_size_bytes: int,
     num_banks: int,
     bank_width_bytes: int,
@@ -138,7 +138,7 @@ def create_gptvq_buffer_partitions(
     codebook_num_banks: int = 0,
     codebook_port_type: PortType | None = None,
 ) -> dict[str, list[SRAMBuffer]]:
-    """Create GPTVQ buffer partitions with separate BankedSRAM per buffer group.
+    """Create VQ buffer partitions with separate BankedSRAM per buffer group.
 
     5 BankedSRAM groups:
     - codebook: dedicated SRAM with configurable num_banks (random access)

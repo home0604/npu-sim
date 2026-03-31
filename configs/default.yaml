@@ -22,8 +22,8 @@ sram:
 
 dram:
   use_dramsim3: true
-  #config_file: ext/DRAMsim3/configs/DDR4_8Gb_x16_2400.ini
-  config_file: ext/DRAMsim3/configs/HBM2_8Gb_x128.ini
+  config_file: ext/DRAMsim3/configs/DDR4_8Gb_x16_2400.ini
+  #config_file: ext/DRAMsim3/configs/HBM2_8Gb_x128.ini
   output_dir: dramsim3_output
   bandwidth_gbps: 25.6
   latency_ns: 50.0

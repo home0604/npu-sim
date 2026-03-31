@@ -52,6 +52,26 @@ class MemoryController:
             sram_cycles=sram_cycles,
         )
 
+    def begin_load_from_dram(
+        self, dram_addr: int, size_bytes: int, cycle: int, tag: str = ""
+    ):
+        """Issue DRAM read without waiting. Returns opaque token."""
+        return self.dram.begin_read(dram_addr, size_bytes, cycle, tag)
+
+    def end_load_from_dram(
+        self, token, sram_buf: SRAMBuffer, size_bytes: int, issue_cycle: int
+    ) -> MemXferResult:
+        """Wait for DRAM read completion and write to SRAM buffer."""
+        dram_resp = self.dram.end_read(token)
+        sram_done = sram_buf.write(0, size_bytes, dram_resp.complete_cycle)
+        dram_cycles = dram_resp.complete_cycle - issue_cycle
+        sram_cycles = sram_done - dram_resp.complete_cycle
+        return MemXferResult(
+            complete_cycle=sram_done,
+            dram_cycles=dram_cycles,
+            sram_cycles=sram_cycles,
+        )
+
     def store_to_dram(
         self, sram_buf: SRAMBuffer, dram_addr: int, size_bytes: int, cycle: int, tag: str = ""
     ) -> MemXferResult:

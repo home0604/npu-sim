@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Dequantization cycle sweep: bank-aware read latency across vec_dim, stages, cb_banks, bank_width."""
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -13,18 +14,26 @@ from core.config import load_config
 # ---------------------------------------------------------------------------
 # Sweep parameters
 # ---------------------------------------------------------------------------
-VECTOR_DIMS    = [2, 4, 8]      # d: codebook vector dimension
-NUM_STAGES     = [1, 2, 4]      # S: RVQ stages
+VECTOR_DIMS    = [8, 32, 64]      # d: codebook vector dimension
+NUM_STAGES     = [1, 2]      # S: RVQ stages
 CODEBOOK_BANKS = [4, 16, 32]    # N_bank: codebook SRAM banks
 BANK_WIDTHS    = [8, 32, 64]    # w_b: bytes per bank per cycle
 
 # Tile size for cycle estimation
+# TILE_M and TILE_K determine dequant cycles (N has no effect on dequant).
 TILE_M = 32
+TILE_N = 32     # to compute reference line 
 TILE_K = 256
 
 
 def main():
-    config = load_config(_root / "configs" / "gptvq.yaml")
+    parser = argparse.ArgumentParser(description="Dequantization cycle sweep")
+    parser.add_argument("--config", type=str,
+                        default=str(_root / "configs" / "vq.yaml"),
+                        help="YAML config path (default: configs/vq.yaml)")
+    args = parser.parse_args()
+
+    config = load_config(args.config)
     sram = config.sram
 
     print(f"Tile: M={TILE_M}, K={TILE_K}\n")
@@ -47,10 +56,10 @@ def main():
 
             for S in NUM_STAGES:
                 for d in VECTOR_DIMS:
-                    config.gptvq.vector_dim = d
-                    config.gptvq.num_stages = S
+                    config.vq.vector_dim = d
+                    config.vq.num_stages = S
 
-                    unit = DequantizationUnit(config.gptvq, sram)
+                    unit = DequantizationUnit(config.vq, sram)
                     latency   = unit._latency_per_lookup()
                     num_lookups  = TILE_M * -(-TILE_K // d)
                     cycles       = unit.dequant_cycles(TILE_M, TILE_K)

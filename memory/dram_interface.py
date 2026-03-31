@@ -119,6 +119,20 @@ class SimpleDRAMModel:
         self.total_write_bytes += size_bytes
         return DRAMResponse(request=req, complete_cycle=complete_cycle)
 
+    # --- Non-blocking API (trivial: result computed immediately) ---
+
+    def begin_read(self, address: int, size_bytes: int, cycle: int, tag: str = "") -> DRAMResponse:
+        return self.issue_read(address, size_bytes, cycle, tag)
+
+    def end_read(self, token: DRAMResponse) -> DRAMResponse:
+        return token
+
+    def begin_write(self, address: int, size_bytes: int, cycle: int, tag: str = "") -> DRAMResponse:
+        return self.issue_write(address, size_bytes, cycle, tag)
+
+    def end_write(self, token: DRAMResponse) -> DRAMResponse:
+        return token
+
     def reset(self) -> None:
         self._bus_free_cycle = 0
         self._request_counter = 0
@@ -198,8 +212,10 @@ class DRAMSim3Interface:
     def _read_callback(self, address: int) -> None:
         from core.events import EventType
 
-        if address in self._pending_reads:
-            req = self._pending_reads.pop(address)
+        if address in self._pending_reads and self._pending_reads[address]:
+            req = self._pending_reads[address].pop(0)
+            if not self._pending_reads[address]:
+                del self._pending_reads[address]
             npu_complete = self._dram_tick_to_npu_cycle(self._dramsim_cycle)
             resp = DRAMResponse(request=req, complete_cycle=npu_complete)
             self.sim_engine.schedule_event_at(
@@ -211,8 +227,10 @@ class DRAMSim3Interface:
     def _write_callback(self, address: int) -> None:
         from core.events import EventType
 
-        if address in self._pending_writes:
-            req = self._pending_writes.pop(address)
+        if address in self._pending_writes and self._pending_writes[address]:
+            req = self._pending_writes[address].pop(0)
+            if not self._pending_writes[address]:
+                del self._pending_writes[address]
             npu_complete = self._dram_tick_to_npu_cycle(self._dramsim_cycle)
             resp = DRAMResponse(request=req, complete_cycle=npu_complete)
             self.sim_engine.schedule_event_at(
@@ -261,7 +279,7 @@ class DRAMSim3Interface:
                 self._mem_system.ClockTick()
                 self._dramsim_cycle += 1
             self._mem_system.AddTransaction(addr, False)
-            self._pending_reads[addr] = req
+            self._pending_reads.setdefault(addr, []).append(req)
 
         self.total_reads += 1
         self.total_read_bytes += size_bytes
@@ -285,7 +303,7 @@ class DRAMSim3Interface:
                 self._mem_system.ClockTick()
                 self._dramsim_cycle += 1
             self._mem_system.AddTransaction(addr, True)
-            self._pending_writes[addr] = req
+            self._pending_writes.setdefault(addr, []).append(req)
 
         self.total_writes += 1
         self.total_write_bytes += size_bytes
@@ -301,12 +319,17 @@ _DRAMSIM3_TICK_BATCH = 1
 
 
 class DRAMSim3Adapter:
-    """Wraps DRAMSim3Interface to provide synchronous issue_read/issue_write returning DRAMResponse.
+    """Wraps DRAMSim3Interface to provide synchronous and non-blocking DRAM access.
 
-    The scheduler and MemoryController expect immediate completion cycle; DRAMSim3
-    completes asynchronously via callbacks. This adapter runs the engine and ticks
-    DRAMSim3 until the request completes, then returns DRAMResponse.
-    Uses batch ticking to reduce Python overhead (tick many cycles, then drain events).
+    Supports two modes:
+    - Blocking: issue_read/issue_write (ticks until complete, returns DRAMResponse)
+    - Non-blocking: begin_read/end_read (issue without tick, tick on end)
+
+    Non-blocking mode enables channel parallelism: multiple requests issued at the
+    same cycle are processed concurrently by DRAMSim3's multi-channel scheduler.
+
+    A persistent completion tracker collects ALL callbacks, preventing event loss
+    when multiple requests are in flight.
     """
 
     def __init__(
@@ -314,6 +337,8 @@ class DRAMSim3Adapter:
         dramsim: DRAMSim3Interface,
         engine: "SimulationEngine",
     ):
+        from core.events import EventType
+
         self._dramsim = dramsim
         self._engine = engine
         self.total_reads = dramsim.total_reads
@@ -321,102 +346,92 @@ class DRAMSim3Adapter:
         self.total_read_bytes = dramsim.total_read_bytes
         self.total_write_bytes = dramsim.total_write_bytes
 
+        self._read_completions: dict[int, dict] = {}
+        self._write_completions: dict[int, dict] = {}
+        engine.register_handler(EventType.DRAM_READ_COMPLETE, self._on_read_complete)
+        engine.register_handler(EventType.DRAM_WRITE_COMPLETE, self._on_write_complete)
+
+    def _on_read_complete(self, event) -> None:
+        req = event.data.get("request")
+        resp = event.data.get("response")
+        if req is None or resp is None:
+            return
+        rid = req.request_id
+        if rid not in self._read_completions:
+            self._read_completions[rid] = {"count": 0, "max_cycle": 0, "request": req}
+        self._read_completions[rid]["count"] += 1
+        self._read_completions[rid]["max_cycle"] = max(
+            self._read_completions[rid]["max_cycle"], resp.complete_cycle)
+
+    def _on_write_complete(self, event) -> None:
+        req = event.data.get("request")
+        resp = event.data.get("response")
+        if req is None or resp is None:
+            return
+        rid = req.request_id
+        if rid not in self._write_completions:
+            self._write_completions[rid] = {"count": 0, "max_cycle": 0, "request": req}
+        self._write_completions[rid]["count"] += 1
+        self._write_completions[rid]["max_cycle"] = max(
+            self._write_completions[rid]["max_cycle"], resp.complete_cycle)
+
     def _drain_events_until(self, max_cycle: int) -> None:
-        """Process all events with cycle <= max_cycle."""
         while not self._engine.event_queue.empty:
             next_ev = self._engine.event_queue.peek()
             if next_ev is None or next_ev.cycle > max_cycle:
                 break
             self._engine.run_one_event()
 
-    def _sync_read_completion(
-        self, request_id: int, expected_callbacks: int
-    ) -> DRAMResponse:
-        from core.events import EventType
+    def _tick_until_ready(self, completions: dict, req_id: int, expected: int) -> dict:
+        while (req_id not in completions
+               or completions[req_id]["count"] < expected):
+            self._dramsim.tick_n(_DRAMSIM3_TICK_BATCH)
+            npu_now = self._dramsim._dram_tick_to_npu_cycle(self._dramsim.current_cycle)
+            self._drain_events_until(npu_now)
+        return completions.pop(req_id)
 
-        state = {
-            "count": 0,
-            "max_cycle": 0,
-            "request": None,
-        }
+    # --- Non-blocking API ---
 
-        def on_read_complete(event) -> None:
-            req = event.data.get("request")
-            resp = event.data.get("response")
-            if req is None or resp is None or req.request_id != request_id:
-                return
-            state["count"] += 1
-            state["max_cycle"] = max(state["max_cycle"], resp.complete_cycle)
-            if state["request"] is None:
-                state["request"] = req
+    def begin_read(
+        self, address: int, size_bytes: int, cycle: int, tag: str = ""
+    ) -> tuple[int, int]:
+        expected = (size_bytes + CACHELINE_SIZE - 1) // CACHELINE_SIZE
+        req_id = self._dramsim.issue_read(address, size_bytes, cycle, tag)
+        self.total_reads = self._dramsim.total_reads
+        self.total_read_bytes = self._dramsim.total_read_bytes
+        return (req_id, expected)
 
-        self._engine.register_handler(EventType.DRAM_READ_COMPLETE, on_read_complete)
-        try:
-            while state["count"] < expected_callbacks:
-                self._dramsim.tick_n(_DRAMSIM3_TICK_BATCH)
-                npu_now = self._dramsim._dram_tick_to_npu_cycle(self._dramsim.current_cycle)
-                self._drain_events_until(npu_now)
-            self.total_reads = self._dramsim.total_reads
-            self.total_read_bytes = self._dramsim.total_read_bytes
-            return DRAMResponse(
-                request=state["request"],
-                complete_cycle=state["max_cycle"],
-            )
-        finally:
-            self._engine.unregister_handler(EventType.DRAM_READ_COMPLETE, on_read_complete)
+    def end_read(self, token: tuple[int, int]) -> DRAMResponse:
+        req_id, expected = token
+        c = self._tick_until_ready(self._read_completions, req_id, expected)
+        return DRAMResponse(request=c["request"], complete_cycle=c["max_cycle"])
 
-    def _sync_write_completion(
-        self, request_id: int, expected_callbacks: int
-    ) -> DRAMResponse:
-        from core.events import EventType
+    def begin_write(
+        self, address: int, size_bytes: int, cycle: int, tag: str = ""
+    ) -> tuple[int, int]:
+        expected = (size_bytes + CACHELINE_SIZE - 1) // CACHELINE_SIZE
+        req_id = self._dramsim.issue_write(address, size_bytes, cycle, tag)
+        self.total_writes = self._dramsim.total_writes
+        self.total_write_bytes = self._dramsim.total_write_bytes
+        return (req_id, expected)
 
-        state = {
-            "count": 0,
-            "max_cycle": 0,
-            "request": None,
-        }
+    def end_write(self, token: tuple[int, int]) -> DRAMResponse:
+        req_id, expected = token
+        c = self._tick_until_ready(self._write_completions, req_id, expected)
+        return DRAMResponse(request=c["request"], complete_cycle=c["max_cycle"])
 
-        def on_write_complete(event) -> None:
-            req = event.data.get("request")
-            resp = event.data.get("response")
-            if req is None or resp is None or req.request_id != request_id:
-                return
-            state["count"] += 1
-            state["max_cycle"] = max(state["max_cycle"], resp.complete_cycle)
-            if state["request"] is None:
-                state["request"] = req
-
-        self._engine.register_handler(EventType.DRAM_WRITE_COMPLETE, on_write_complete)
-        try:
-            while state["count"] < expected_callbacks:
-                self._dramsim.tick_n(_DRAMSIM3_TICK_BATCH)
-                npu_now = self._dramsim._dram_tick_to_npu_cycle(self._dramsim.current_cycle)
-                self._drain_events_until(npu_now)
-            self.total_writes = self._dramsim.total_writes
-            self.total_write_bytes = self._dramsim.total_write_bytes
-            return DRAMResponse(
-                request=state["request"],
-                complete_cycle=state["max_cycle"],
-            )
-        finally:
-            self._engine.unregister_handler(
-                EventType.DRAM_WRITE_COMPLETE, on_write_complete
-            )
+    # --- Blocking API (backward compatible) ---
 
     def issue_read(
         self, address: int, size_bytes: int, cycle: int, tag: str = ""
     ) -> DRAMResponse:
-        expected = (size_bytes + CACHELINE_SIZE - 1) // CACHELINE_SIZE
-        request_id = self._dramsim.issue_read(address, size_bytes, cycle, tag)
-        return self._sync_read_completion(request_id, expected)
+        return self.end_read(self.begin_read(address, size_bytes, cycle, tag))
 
     def issue_write(
         self, address: int, size_bytes: int, cycle: int, tag: str = ""
     ) -> DRAMResponse:
-        expected = (size_bytes + CACHELINE_SIZE - 1) // CACHELINE_SIZE
-        request_id = self._dramsim.issue_write(address, size_bytes, cycle, tag)
-        return self._sync_write_completion(request_id, expected)
+        return self.end_write(self.begin_write(address, size_bytes, cycle, tag))
 
     def reset(self) -> None:
-        """DRAMSim3 state is not reset by this adapter; config-driven if needed."""
-        pass
+        self._read_completions.clear()
+        self._write_completions.clear()

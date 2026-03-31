@@ -46,7 +46,7 @@ class SRAMConfig:
     weight_buffer_fraction: float = 0.4
     activation_buffer_fraction: float = 0.3
     output_buffer_fraction: float = 0.3
-    # GPTVQ buffer fractions (used when gptvq.enabled is True)
+    # VQ buffer fractions (used when vq.enabled is True)
     codebook_buffer_fraction: float = 0.10
     index_buffer_fraction: float = 0.05
     scale_buffer_fraction: float = 0.05
@@ -70,8 +70,8 @@ class DoubleBufferConfig:
 
 
 @dataclass
-class GPTVQConfig:
-    """GPTVQ (GPT Vector Quantization) configuration.
+class VQConfig:
+    """VQ (Vector Quantization) configuration.
 
     Basic mode: codebook + weight index → dequantized weight.
     Optional scaling: s * codebook[idx] + z per vector group.
@@ -88,17 +88,19 @@ class GPTVQConfig:
     codebook_dtype: str = "FP16"  # dtype for codebook entries
     dequant_pipeline_stages: int = 3  # pipeline depth of dequant unit
 
+    _DTYPE_BYTES = {"FP16": 2, "BF16": 2, "FP32": 4, "INT8": 1, "INT4": 0.5}
+
     @property
-    def codebook_entry_bytes(self) -> int:
-        return {"FP16": 2, "BF16": 2, "FP32": 4, "INT8": 1}[self.codebook_dtype]
+    def codebook_entry_bytes(self) -> float:
+        return self._DTYPE_BYTES[self.codebook_dtype]
 
     @property
     def scale_bytes(self) -> int:
-        return {"FP16": 2, "BF16": 2, "FP32": 4, "INT8": 1}[self.scale_dtype]
+        return int(self._DTYPE_BYTES[self.scale_dtype])
 
     @property
     def zero_point_bytes(self) -> int:
-        return {"FP16": 2, "BF16": 2, "FP32": 4, "INT8": 1}[self.zero_point_dtype]
+        return int(self._DTYPE_BYTES[self.zero_point_dtype])
 
     @property
     def index_elem_bytes(self) -> int:
@@ -114,7 +116,7 @@ class NPUConfig:
     sram: SRAMConfig = field(default_factory=SRAMConfig)
     dram: DRAMConfig = field(default_factory=DRAMConfig)
     double_buffer: DoubleBufferConfig = field(default_factory=DoubleBufferConfig)
-    gptvq: GPTVQConfig = field(default_factory=GPTVQConfig)
+    vq: VQConfig = field(default_factory=VQConfig)
 
 
 def _dict_to_dataclass(cls, data: dict):

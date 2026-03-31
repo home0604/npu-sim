@@ -54,16 +54,16 @@ def main():
         help="Enable double buffering (disabled by default)",
     )
     parser.add_argument(
-        "--gptvq",
+        "--vq",
         action="store_true",
-        help="Enable GPTVQ mode (codebook + index → dequantized weight, OS dataflow)",
+        help="Enable VQ mode (codebook + index → dequantized weight, OS dataflow)",
     )
-    parser.add_argument("--codebook-size", type=int, default=None, help="GPTVQ codebook size R (default: 16)")
-    parser.add_argument("--vector-dim", type=int, default=None, help="GPTVQ vector dimension d (default: 2)")
+    parser.add_argument("--codebook-size", type=int, default=None, help="VQ codebook size R (default: 16)")
+    parser.add_argument("--vector-dim", type=int, default=None, help="VQ vector dimension d (default: 2)")
     parser.add_argument(
         "--use-scaling",
         action="store_true",
-        help="Enable GPTVQ per-group scaling (s, z)",
+        help="Enable VQ per-group scaling (s, z)",
     )
 
     args = parser.parse_args()
@@ -72,16 +72,16 @@ def main():
     config.double_buffer.enabled = args.use_db
     if args.use_dramsim3:
         config.dram.use_dramsim3 = True
-    if args.gptvq:
-        config.gptvq.enabled = True
+    if args.vq:
+        config.vq.enabled = True
     if args.codebook_size is not None:
-        config.gptvq.codebook_size = args.codebook_size
+        config.vq.codebook_size = args.codebook_size
         import math
-        config.gptvq.index_bits = int(math.ceil(math.log2(args.codebook_size)))
+        config.vq.index_bits = int(math.ceil(math.log2(args.codebook_size)))
     if args.vector_dim is not None:
-        config.gptvq.vector_dim = args.vector_dim
+        config.vq.vector_dim = args.vector_dim
     if args.use_scaling:
-        config.gptvq.use_scaling = True
+        config.vq.use_scaling = True
     if args.dataflow is not None:
         config.systolic.dataflow = args.dataflow
     sim = NPUSimulator(config)
@@ -94,9 +94,9 @@ def main():
     print(f"  DRAM: {dram_backend}")
     print(f"  Dtype: {config.dtype.compute_dtype}")
     print(f"  Double Buffer: {config.double_buffer.enabled}")
-    if config.gptvq.enabled:
-        print(f"  GPTVQ: enabled (R={config.gptvq.codebook_size}, d={config.gptvq.vector_dim}, "
-              f"{config.gptvq.index_bits}-bit index, scaling={'on' if config.gptvq.use_scaling else 'off'})")
+    if config.vq.enabled:
+        print(f"  VQ: enabled (R={config.vq.codebook_size}, d={config.vq.vector_dim}, "
+              f"{config.vq.index_bits}-bit index, scaling={'on' if config.vq.use_scaling else 'off'})")
     print()
 
     if args.workload == "matmul":

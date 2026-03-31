@@ -11,9 +11,9 @@ from core.clock import SimulationEngine
 from core.config import DataTypeConfig, NPUConfig, load_config
 from core.datatypes import AccumulatorType, DataType
 from core.stats import LayerStats, SimStats
-from dataflow.gptvq_dataflow import GPTVQDataflow
-from dataflow.gptvq_scheduler import GPTVQScheduler
-from dataflow.gptvq_tiler import GPTVQTiler
+from dataflow.vq_dataflow import VQDataflow
+from dataflow.vq_scheduler import VQScheduler
+from dataflow.vq_tiler import VQTiler
 from dataflow.scheduler import TileScheduler
 from dataflow.tiler import Tiler
 from dataflow.stationary import StationaryDataflow
@@ -25,7 +25,7 @@ from memory.dram_interface import (
 from memory.double_buffer import DoubleBufferController
 from memory.memory_controller import MemoryController
 from memory.sram import PortType
-from memory.sram_buffers import SRAMBuffer, collect_srams, create_buffer_partitions, create_gptvq_buffer_partitions
+from memory.sram_buffers import SRAMBuffer, collect_srams, create_buffer_partitions, create_vq_buffer_partitions
 from sim.functional_check import (
     compare_outputs,
     compute_diff_report,
@@ -34,7 +34,7 @@ from sim.functional_check import (
     reference_matmul,
     reference_transformer_layer,
     run_attention_functional,
-    run_gptvq_schedule_functional,
+    run_vq_schedule_functional,
     run_schedule_functional,
     run_transformer_layer_functional,
 )
@@ -152,10 +152,10 @@ class NPUSimulator:
             clock_freq_mhz=config.systolic.clock_freq_mhz,
         )
 
-        # GPTVQ components (initialized only when enabled)
-        self.gptvq_enabled = getattr(config.gptvq, "enabled", False)
-        if self.gptvq_enabled:
-            self._init_gptvq()
+        # VQ components (initialized only when enabled)
+        self.vq_enabled = getattr(config.vq, "enabled", False)
+        if self.vq_enabled:
+            self._init_vq()
 
     def _create_scheduler(
         self,
@@ -178,13 +178,13 @@ class NPUSimulator:
             dataflow=self.config.systolic.dataflow,
         )
 
-    def _init_gptvq(self) -> None:
-        """Initialize GPTVQ-specific components."""
+    def _init_vq(self) -> None:
+        """Initialize VQ-specific components."""
         cfg = self.config
 
-        self.dequant_unit = DequantizationUnit(cfg.gptvq, cfg.sram)
+        self.dequant_unit = DequantizationUnit(cfg.vq, cfg.sram)
 
-        self.gptvq_buffers = create_gptvq_buffer_partitions(
+        self.vq_buffers = create_vq_buffer_partitions(
             **self._sram_params,
             codebook_fraction=cfg.sram.codebook_buffer_fraction,
             index_fraction=cfg.sram.index_buffer_fraction,
@@ -193,7 +193,7 @@ class NPUSimulator:
             activation_fraction=cfg.sram.activation_buffer_fraction,
             output_fraction=cfg.sram.output_buffer_fraction,
             double_buffer=cfg.double_buffer.enabled,
-            use_scaling=cfg.gptvq.use_scaling,
+            use_scaling=cfg.vq.use_scaling,
             codebook_num_banks=cfg.sram.codebook_sram.num_banks,
             codebook_port_type=(
                 PortType.DUAL if cfg.sram.codebook_sram.port_type.lower() == "dual"
@@ -202,36 +202,36 @@ class NPUSimulator:
             ),
         )
 
-        self.gptvq_tiler = GPTVQTiler(
+        self.vq_tiler = VQTiler(
             cfg.sram,
             cfg.systolic,
             cfg.dtype,
-            cfg.gptvq,
+            cfg.vq,
             double_buffer=cfg.double_buffer.enabled,
         )
 
-        self.gptvq_dataflow = GPTVQDataflow(self.gptvq_tiler, cfg.gptvq)
+        self.vq_dataflow = VQDataflow(self.vq_tiler, cfg.vq)
 
-    def _create_gptvq_scheduler(
+    def _create_vq_scheduler(
         self,
         codebook_base_dram: int = 0,
         index_base_dram: int = 0,
         scale_base_dram: int = 0,
         act_base_dram: int = 0,
         output_base_dram: int = 0,
-    ) -> GPTVQScheduler:
-        return GPTVQScheduler(
+    ) -> VQScheduler:
+        return VQScheduler(
             engine=self.engine,
             systolic=self.systolic,
             dequant_unit=self.dequant_unit,
             mem_ctrl=self.mem_ctrl,
             double_buf=self.double_buf,
-            codebook_bufs=self.gptvq_buffers["codebook"],
-            index_bufs=self.gptvq_buffers["index"],
-            scale_bufs=self.gptvq_buffers["scale"],
-            dequant_weight_bufs=self.gptvq_buffers["dequant_weight"],
-            act_bufs=self.gptvq_buffers["activation"],
-            output_buf=self.gptvq_buffers["output"][0],
+            codebook_bufs=self.vq_buffers["codebook"],
+            index_bufs=self.vq_buffers["index"],
+            scale_bufs=self.vq_buffers["scale"],
+            dequant_weight_bufs=self.vq_buffers["dequant_weight"],
+            act_bufs=self.vq_buffers["activation"],
+            output_buf=self.vq_buffers["output"][0],
             stats=self.stats,
             codebook_base_dram=codebook_base_dram,
             index_base_dram=index_base_dram,
@@ -264,10 +264,28 @@ class NPUSimulator:
         Returns summary statistics dict; when check_correctness is True, includes
         "correctness": "pass" | "fail" and "correctness_message".
         """
-        if self.gptvq_enabled:
-            return self._run_matmul_gptvq(
+        # Auto-separate address spaces so DRAMSim3 can map to different channels
+        bpe = self.dtype.num_bytes
+        acc_bpe = self.acc_dtype.num_bytes
+        if weight_base == 0 and act_base == 0 and output_base == 0:
+            weight_base = 0
+            act_base = M * K * bpe
+            output_base = act_base + K * N * bpe
+
+        if self.vq_enabled:
+            import math
+            g = self.config.vq
+            d, R = g.vector_dim, g.codebook_size
+            cb_bytes = int(R * d * g.codebook_entry_bytes)
+            idx_bytes = M * math.ceil(K / d) * g.index_elem_bytes
+            scale_bytes = math.ceil(K / d) * 4 if g.use_scaling else 0
+            return self._run_matmul_vq(
                 M, N, K, name=name,
-                act_base=act_base, output_base=output_base,
+                codebook_base=0,
+                index_base=cb_bytes,
+                scale_base=cb_bytes + idx_bytes,
+                act_base=cb_bytes + idx_bytes + scale_bytes,
+                output_base=cb_bytes + idx_bytes + scale_bytes + K * N * bpe,
                 check_correctness=check_correctness,
                 activation=activation, seed=seed,
             )
@@ -349,12 +367,12 @@ class NPUSimulator:
                 summary["correctness_report"] = correctness_report
         return summary
 
-    def _run_matmul_gptvq(
+    def _run_matmul_vq(
         self,
         M: int,
         N: int,
         K: int,
-        name: str = "MatMul_GPTVQ",
+        name: str = "MatMul_VQ",
         codebook_base: int = 0,
         index_base: int = 0,
         scale_base: int = 0,
@@ -368,14 +386,14 @@ class NPUSimulator:
         zero_points: torch.Tensor | None = None,
         seed: int | None = 42,
     ) -> dict:
-        """Simulate a GPTVQ MatMul: C[M,N] = dequant(codebook, indices, scales)[M,K] * A[K,N]."""
+        """Simulate a VQ MatMul: C[M,N] = dequant(codebook, indices, scales)[M,K] * A[K,N]."""
         import math
 
-        gptvq_cfg = self.config.gptvq
-        d = gptvq_cfg.vector_dim
-        R = gptvq_cfg.codebook_size
+        vq_cfg = self.config.vq
+        d = vq_cfg.vector_dim
+        R = vq_cfg.codebook_size
 
-        tile_config, schedule = self.gptvq_dataflow.generate_schedule(
+        tile_config, schedule = self.vq_dataflow.generate_schedule(
             M, N, K,
             dataflow=self.config.systolic.dataflow,
             codebook_base_addr=codebook_base,
@@ -401,9 +419,9 @@ class NPUSimulator:
                 activation = torch.randn(K, N, generator=gen).to(
                     self.dtype.torch_dtype if self.dtype != DataType.INT8 else torch.float32
                 )
-            if gptvq_cfg.use_scaling and scales is None:
+            if vq_cfg.use_scaling and scales is None:
                 scales = torch.randn(K_groups, generator=gen).abs() + 0.1
-            if gptvq_cfg.use_scaling and zero_points is None:
+            if vq_cfg.use_scaling and zero_points is None:
                 zero_points = torch.randn(K_groups, generator=gen) * 0.01
 
             dequant_full = self.dequant_unit.dequantize(
@@ -417,7 +435,7 @@ class NPUSimulator:
                 self.acc_dtype,
             )
 
-            C_sim = run_gptvq_schedule_functional(
+            C_sim = run_vq_schedule_functional(
                 schedule, tile_config, codebook, indices, activation,
                 self.dequant_unit, self.systolic, M, N, K,
                 scales=scales, zero_points=zero_points,
@@ -432,7 +450,7 @@ class NPUSimulator:
             )
             if not correctness_pass:
                 raise AssertionError(
-                    f"GPTVQ functionality check failed: {correctness_message}\n"
+                    f"VQ functionality check failed: {correctness_message}\n"
                     f"{format_diff_report(correctness_report)}"
                 )
 
@@ -444,7 +462,7 @@ class NPUSimulator:
         self.stats.tile.num_k_tiles = tile_config.num_k_tiles
         self.stats.tile.total_tiles = tile_config.total_tiles
 
-        scheduler = self._create_gptvq_scheduler(
+        scheduler = self._create_vq_scheduler(
             codebook_base, index_base, scale_base, act_base, output_base
         )
         end_cycle = scheduler.execute_schedule(schedule, self.engine.current_cycle)
@@ -453,19 +471,19 @@ class NPUSimulator:
 
         original_weight_bytes = M * K * self.dtype.num_bytes
         K_groups = math.ceil(K / d)
-        compressed_bytes = (
-            R * d * gptvq_cfg.codebook_entry_bytes
-            + M * K_groups * gptvq_cfg.index_elem_bytes
+        compressed_bytes = int(
+            R * d * vq_cfg.codebook_entry_bytes
+            + M * K_groups * vq_cfg.index_elem_bytes
         )
-        if gptvq_cfg.use_scaling:
-            compressed_bytes += K_groups * (gptvq_cfg.scale_bytes + gptvq_cfg.zero_point_bytes)
+        if vq_cfg.use_scaling:
+            compressed_bytes += K_groups * (vq_cfg.scale_bytes + vq_cfg.zero_point_bytes)
         if compressed_bytes > 0:
-            self.stats.gptvq.compression_ratio = original_weight_bytes / compressed_bytes
+            self.stats.vq.compression_ratio = original_weight_bytes / compressed_bytes
 
         self.stats.layer_stats.append(
             LayerStats(
                 name=name,
-                op_type="matmul_gptvq",
+                op_type="matmul_vq",
                 cycles=end_cycle,
                 mac_ops=M * N * K,
                 dram_bytes=self.stats.memory.dram_read_bytes + self.stats.memory.dram_write_bytes,
@@ -736,8 +754,8 @@ class NPUSimulator:
     def _get_all_srams(self):
         """Collect unique BankedSRAM instances from all buffer dicts."""
         srams = collect_srams(self.buffers)
-        if self.gptvq_enabled and hasattr(self, "gptvq_buffers"):
-            srams.extend(collect_srams(self.gptvq_buffers))
+        if self.vq_enabled and hasattr(self, "vq_buffers"):
+            srams.extend(collect_srams(self.vq_buffers))
         return srams
 
     def _reset_for_layer(self) -> None:

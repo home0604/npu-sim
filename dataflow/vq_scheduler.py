@@ -1,4 +1,4 @@
-"""GPTVQ tile scheduler with dequantization step and double buffering.
+"""VQ tile scheduler with dequantization step and double buffering.
 
 Execution flow per tile:
 1. Load codebook (if first k-tile), indices, scales, activation from DRAM → SRAM
@@ -21,14 +21,14 @@ from core.stats import SimStats
 from memory.double_buffer import DoubleBufferController
 from memory.memory_controller import MemoryController
 from memory.sram_buffers import SRAMBuffer
-from dataflow.gptvq_dataflow import GPTVQTileOp
+from dataflow.vq_dataflow import VQTileOp
 
 if TYPE_CHECKING:
     from core.clock import SimulationEngine
 
 
-class GPTVQScheduler:
-    """Orchestrates GPTVQ tile execution with dequantization and double buffering.
+class VQScheduler:
+    """Orchestrates VQ tile execution with dequantization and double buffering.
 
     Flow for each tile:
     1. Load codebook (if needed), indices, scales, activation from DRAM → SRAM
@@ -78,8 +78,8 @@ class GPTVQScheduler:
         self.act_base_dram = act_base_dram
         self.output_base_dram = output_base_dram
 
-    def execute_schedule(self, schedule: list[GPTVQTileOp], start_cycle: int = 0) -> int:
-        """Execute a GPTVQ tile schedule and return total completion cycle."""
+    def execute_schedule(self, schedule: list[VQTileOp], start_cycle: int = 0) -> int:
+        """Execute a VQ tile schedule and return total completion cycle."""
         if not schedule:
             return start_cycle
 
@@ -118,6 +118,9 @@ class GPTVQScheduler:
         self._update_compute_stats(first_tile, cycles_info)
         if first_tile.load_indices:
             self._update_dequant_stats(first_tile, dequant_done - load_done)
+
+        if self.dataflow != "OS" and (first_tile.accumulate or not first_tile.store_output):
+            compute_done_cycle = self._accumulate_output(first_tile, compute_done_cycle)
 
         if first_tile.store_output:
             compute_done_cycle = self._store_output(first_tile, compute_done_cycle)
@@ -170,6 +173,9 @@ class GPTVQScheduler:
                     current_tile, dequant_done - max(load_done, prefetch_start)
                 )
 
+            if self.dataflow != "OS" and (current_tile.accumulate or not current_tile.store_output):
+                compute_done = self._accumulate_output(current_tile, compute_done)
+
             if current_tile.store_output:
                 compute_done = self._store_output(current_tile, compute_done)
 
@@ -181,7 +187,7 @@ class GPTVQScheduler:
         self.stats.total_cycles = max(self.stats.total_cycles, cycle)
         return cycle
 
-    def _execute_single_buffer(self, tiles: deque[GPTVQTileOp], cycle: int) -> int:
+    def _execute_single_buffer(self, tiles: deque[VQTileOp], cycle: int) -> int:
         """Sequential execution without double buffering."""
         for tile in tiles:
             if tile.load_indices:
@@ -205,6 +211,9 @@ class GPTVQScheduler:
             if tile.load_indices:
                 self._update_dequant_stats(tile, dequant_done - load_done)
 
+            if self.dataflow != "OS" and (tile.accumulate or not tile.store_output):
+                compute_done = self._accumulate_output(tile, compute_done)
+
             if tile.store_output:
                 compute_done = self._store_output(tile, compute_done)
 
@@ -214,7 +223,7 @@ class GPTVQScheduler:
         return cycle
 
     def _load_and_dequant(
-        self, tile: GPTVQTileOp, slot_idx: int, cycle: int
+        self, tile: VQTileOp, slot_idx: int, cycle: int
     ) -> tuple[int, int]:
         """Load codebook + indices + scales, then dequantize.
 
@@ -239,12 +248,12 @@ class GPTVQScheduler:
         # codebook read and weight write happen together per vector, no extra cycles.
         return load_done, dequant_done
 
-    def _load_codebook(self, tile: GPTVQTileOp, cycle: int) -> int:
+    def _load_codebook(self, tile: VQTileOp, cycle: int) -> int:
         """Load codebook from DRAM to SRAM."""
         dram_addr = self.codebook_base_dram + tile.codebook_dram_offset
         sram_buf = self.codebook_bufs[0]
         d = self.dequant_unit.vector_dim
-        size_bytes = self.dequant_unit.codebook_size * d * self.dequant_unit.config.codebook_entry_bytes
+        size_bytes = int(self.dequant_unit.codebook_size * d * self.dequant_unit.config.codebook_entry_bytes)
 
         result = self.mem_ctrl.load_from_dram(
             dram_addr, sram_buf, size_bytes, cycle, "codebook"
@@ -253,10 +262,10 @@ class GPTVQScheduler:
         self.stats.memory.dram_read_count += 1
         self.stats.memory.dram_read_cycles += result.dram_cycles
         self.stats.memory.sram_write_cycles += result.sram_cycles
-        self.stats.gptvq.codebook_load_bytes += size_bytes
+        self.stats.vq.codebook_load_bytes += size_bytes
         return result.complete_cycle
 
-    def _load_indices(self, tile: GPTVQTileOp, slot_idx: int, cycle: int) -> int:
+    def _load_indices(self, tile: VQTileOp, slot_idx: int, cycle: int) -> int:
         """Load weight indices from DRAM to SRAM."""
         dram_addr = self.index_base_dram + tile.index_dram_offset
         sram_buf = self.index_bufs[min(slot_idx, len(self.index_bufs) - 1)]
@@ -271,10 +280,10 @@ class GPTVQScheduler:
         self.stats.memory.dram_read_count += 1
         self.stats.memory.dram_read_cycles += result.dram_cycles
         self.stats.memory.sram_write_cycles += result.sram_cycles
-        self.stats.gptvq.index_load_bytes += size_bytes
+        self.stats.vq.index_load_bytes += size_bytes
         return result.complete_cycle
 
-    def _load_scales(self, tile: GPTVQTileOp, slot_idx: int, cycle: int) -> int:
+    def _load_scales(self, tile: VQTileOp, slot_idx: int, cycle: int) -> int:
         """Load scaling factors (and zero points) from DRAM to SRAM."""
         dram_addr = self.scale_base_dram + tile.scale_dram_offset
         sram_buf = self.scale_bufs[min(slot_idx, len(self.scale_bufs) - 1)]
@@ -294,10 +303,10 @@ class GPTVQScheduler:
         self.stats.memory.dram_read_count += 1
         self.stats.memory.dram_read_cycles += result.dram_cycles
         self.stats.memory.sram_write_cycles += result.sram_cycles
-        self.stats.gptvq.scale_load_bytes += size_bytes
+        self.stats.vq.scale_load_bytes += size_bytes
         return result.complete_cycle
 
-    def _load_activation(self, tile: GPTVQTileOp, slot_idx: int, cycle: int) -> int:
+    def _load_activation(self, tile: VQTileOp, slot_idx: int, cycle: int) -> int:
         """Load activation tile from DRAM to SRAM."""
         dram_addr = self.act_base_dram + tile.activation_dram_offset
         sram_buf = self.act_bufs[min(slot_idx, len(self.act_bufs) - 1)]
@@ -312,7 +321,19 @@ class GPTVQScheduler:
         self.stats.memory.sram_write_cycles += result.sram_cycles
         return result.complete_cycle
 
-    def _store_output(self, tile: GPTVQTileOp, cycle: int) -> int:
+    def _accumulate_output(self, tile: VQTileOp, cycle: int) -> int:
+        """Partial-sum SRAM traffic for WS/IS accumulation between k-tiles."""
+        size = tile.tile_m * tile.tile_n * self.systolic.acc_dtype.num_bytes
+        done = cycle
+        if tile.accumulate:
+            done = self.output_buf.read(0, size, done)
+        if not tile.store_output:
+            done = self.output_buf.write(0, size, done)
+        self.stats.memory.accumulation_count += 1
+        self.stats.memory.accumulation_cycles += done - cycle
+        return done
+
+    def _store_output(self, tile: VQTileOp, cycle: int) -> int:
         """Store output tile from SRAM to DRAM."""
         dram_addr = self.output_base_dram + tile.output_dram_offset
         size_bytes = tile.tile_m * tile.tile_n * self.systolic.acc_dtype.num_bytes
@@ -326,15 +347,15 @@ class GPTVQScheduler:
         self.stats.memory.dram_write_cycles += result.dram_cycles
         return result.complete_cycle
 
-    def _update_compute_stats(self, tile: GPTVQTileOp, cycles_info) -> None:
+    def _update_compute_stats(self, tile: VQTileOp, cycles_info) -> None:
         self.stats.compute.total_mac_ops += tile.tile_m * tile.tile_n * tile.tile_k
         self.stats.compute.total_compute_cycles += cycles_info.total_cycles
         self.stats.compute.pipeline_fill_cycles += cycles_info.pipeline_fill_cycles
         self.stats.compute.pipeline_drain_cycles += cycles_info.pipeline_drain_cycles
         self.stats.compute.total_tiles_processed += 1
 
-    def _update_dequant_stats(self, tile: GPTVQTileOp, dequant_cycles: int) -> None:
+    def _update_dequant_stats(self, tile: VQTileOp, dequant_cycles: int) -> None:
         d = self.dequant_unit.vector_dim
         num_vectors = tile.tile_m * math.ceil(tile.tile_k / d)
-        self.stats.gptvq.total_dequant_cycles += max(0, dequant_cycles)
-        self.stats.gptvq.total_vectors_dequantized += num_vectors
+        self.stats.vq.total_dequant_cycles += max(0, dequant_cycles)
+        self.stats.vq.total_vectors_dequantized += num_vectors

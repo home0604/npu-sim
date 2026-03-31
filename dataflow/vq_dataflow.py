@@ -1,4 +1,4 @@
-"""GPTVQ dataflow tile schedule generation for OS, WS, and IS.
+"""VQ dataflow tile schedule generation for OS, WS, and IS.
 
 OS (Output Stationary) — M→N→K:
     Output C[m,n] accumulates in PEs over K.
@@ -22,13 +22,13 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from core.config import GPTVQConfig
-from dataflow.gptvq_tiler import GPTVQTileConfig, GPTVQTiler
+from core.config import VQConfig
+from dataflow.vq_tiler import VQTileConfig, VQTiler
 
 
 @dataclass
-class GPTVQTileOp:
-    """A single tile operation in a GPTVQ execution schedule."""
+class VQTileOp:
+    """A single tile operation in a VQ execution schedule."""
 
     m_idx: int
     n_idx: int
@@ -52,18 +52,18 @@ class GPTVQTileOp:
     output_dram_offset: int = 0
 
 
-class GPTVQDataflow:
-    """GPTVQ dataflow tile schedule generation (OS, WS, IS).
+class VQDataflow:
+    """VQ dataflow tile schedule generation (OS, WS, IS).
 
-    Generates an ordered list of GPTVQTileOp that defines:
+    Generates an ordered list of VQTileOp that defines:
     - What data to load (codebook, indices, scales, activation)
     - When to dequantize and compute
     - When to store output (last K-tile of each output tile)
     """
 
-    def __init__(self, tiler: GPTVQTiler, gptvq_config: GPTVQConfig):
+    def __init__(self, tiler: VQTiler, vq_config: VQConfig):
         self.tiler = tiler
-        self.gptvq = gptvq_config
+        self.vq = vq_config
 
     def generate_schedule(
         self,
@@ -76,8 +76,8 @@ class GPTVQDataflow:
         scale_base_addr: int = 0,
         activation_base_addr: int = 0,
         output_base_addr: int = 0,
-    ) -> tuple[GPTVQTileConfig, list[GPTVQTileOp]]:
-        """Generate ordered list of tile operations for a GPTVQ MatMul.
+    ) -> tuple[VQTileConfig, list[VQTileOp]]:
+        """Generate ordered list of tile operations for a VQ MatMul.
 
         Args:
             M, N, K: MatMul dimensions C[M,N] = W_deq[M,K] * A[K,N]
@@ -87,13 +87,13 @@ class GPTVQDataflow:
             (tile_config, schedule) tuple
         """
         tc = self.tiler.compute_tiles(M, N, K)
-        d = self.gptvq.vector_dim
-        idx_bytes = self.gptvq.index_elem_bytes
+        d = self.vq.vector_dim
+        idx_bytes = self.vq.index_elem_bytes
         act_bpe = self.tiler.act_bytes_per_elem
         acc_bytes = self.tiler.acc_bytes
-        use_scaling = self.gptvq.use_scaling
-        scale_bytes = self.gptvq.scale_bytes if use_scaling else 0
-        zp_bytes = self.gptvq.zero_point_bytes if use_scaling else 0
+        use_scaling = self.vq.use_scaling
+        scale_bytes = self.vq.scale_bytes if use_scaling else 0
+        zp_bytes = self.vq.zero_point_bytes if use_scaling else 0
         K_groups = math.ceil(K / d)
 
         if dataflow == "WS":
@@ -109,9 +109,9 @@ class GPTVQDataflow:
     def _schedule_os(
         self, tc, M, N, K, d, idx_bytes, act_bpe, acc_bytes,
         use_scaling, scale_bytes, zp_bytes, K_groups,
-    ) -> tuple[GPTVQTileConfig, list[GPTVQTileOp]]:
+    ) -> tuple[VQTileConfig, list[VQTileOp]]:
         """OS: M→N→K.  Output C[m,n] accumulates in PEs over K."""
-        schedule: list[GPTVQTileOp] = []
+        schedule: list[VQTileOp] = []
 
         for m in range(tc.num_m_tiles):
             eff_m = min(tc.tile_m, M - m * tc.tile_m)
@@ -128,7 +128,7 @@ class GPTVQDataflow:
                     act_offset = (k * tc.tile_k * N + n * tc.tile_n) * act_bpe
                     out_offset = (m * tc.tile_m * N + n * tc.tile_n) * acc_bytes
 
-                    schedule.append(GPTVQTileOp(
+                    schedule.append(VQTileOp(
                         m_idx=m, n_idx=n, k_idx=k,
                         tile_m=eff_m, tile_n=eff_n, tile_k=eff_k,
                         load_codebook=is_first_k,
@@ -149,13 +149,13 @@ class GPTVQDataflow:
     def _schedule_ws(
         self, tc, M, N, K, d, idx_bytes, act_bpe, acc_bytes,
         use_scaling, scale_bytes, zp_bytes, K_groups,
-    ) -> tuple[GPTVQTileConfig, list[GPTVQTileOp]]:
+    ) -> tuple[VQTileConfig, list[VQTileOp]]:
         """WS: M→K→N.  W_deq[m,k] stays in dequant_weight buffer across N.
 
         load_indices / load_codebook / load_scales only on n==0 (once per (m,k)).
         load_activation on every tile (A[k,n] streams through N).
         """
-        schedule: list[GPTVQTileOp] = []
+        schedule: list[VQTileOp] = []
 
         for m in range(tc.num_m_tiles):
             eff_m = min(tc.tile_m, M - m * tc.tile_m)
@@ -174,7 +174,7 @@ class GPTVQDataflow:
                     act_offset = (k * tc.tile_k * N + n * tc.tile_n) * act_bpe
                     out_offset = (m * tc.tile_m * N + n * tc.tile_n) * acc_bytes
 
-                    schedule.append(GPTVQTileOp(
+                    schedule.append(VQTileOp(
                         m_idx=m, n_idx=n, k_idx=k,
                         tile_m=eff_m, tile_n=eff_n, tile_k=eff_k,
                         load_codebook=is_first_n,          # codebook once per (m,k)
@@ -195,14 +195,14 @@ class GPTVQDataflow:
     def _schedule_is(
         self, tc, M, N, K, d, idx_bytes, act_bpe, acc_bytes,
         use_scaling, scale_bytes, zp_bytes, K_groups,
-    ) -> tuple[GPTVQTileConfig, list[GPTVQTileOp]]:
+    ) -> tuple[VQTileConfig, list[VQTileOp]]:
         """IS: K→N→M.  A[k,n] stays in activation buffer across M.
 
         load_activation only on m==0 (once per (k,n)).
         load_indices on every tile (W[m,k] row changes per m).
         load_scales only on m==0 (scales are per k-group, same for all m).
         """
-        schedule: list[GPTVQTileOp] = []
+        schedule: list[VQTileOp] = []
 
         for k in range(tc.num_k_tiles):
             eff_k = min(tc.tile_k, K - k * tc.tile_k)
@@ -221,7 +221,7 @@ class GPTVQDataflow:
                     idx_offset = (m * tc.tile_m * K_groups + k_group_start) * idx_bytes
                     out_offset = (m * tc.tile_m * N + n * tc.tile_n) * acc_bytes
 
-                    schedule.append(GPTVQTileOp(
+                    schedule.append(VQTileOp(
                         m_idx=m, n_idx=n, k_idx=k,
                         tile_m=eff_m, tile_n=eff_n, tile_k=eff_k,
                         load_codebook=is_first_m,          # codebook once per (k,n)

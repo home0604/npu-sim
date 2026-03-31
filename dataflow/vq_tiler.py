@@ -1,4 +1,4 @@
-"""GPTVQ-aware tiler for computing tile sizes with compressed weight data.
+"""VQ-aware tiler for computing tile sizes with compressed weight data.
 
 Instead of raw weight tiles, accounts for codebook, index, and optional scale
 data sizes when determining how large tiles can be within SRAM budget.
@@ -9,12 +9,12 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from core.config import DataTypeConfig, GPTVQConfig, SRAMConfig, SystolicArrayConfig
+from core.config import DataTypeConfig, VQConfig, SRAMConfig, SystolicArrayConfig
 
 
 @dataclass
-class GPTVQTileConfig:
-    """Computed tile sizes and counts for a GPTVQ MatMul operation."""
+class VQTileConfig:
+    """Computed tile sizes and counts for a VQ MatMul operation."""
 
     tile_m: int
     tile_n: int
@@ -37,8 +37,8 @@ class GPTVQTileConfig:
         return self.num_m_tiles * self.num_n_tiles * self.num_k_tiles
 
 
-class GPTVQTiler:
-    """Computes optimal tiling for GPTVQ-compressed matmul operations.
+class VQTiler:
+    """Computes optimal tiling for VQ-compressed matmul operations.
 
     Tile constraints differ from standard tiler:
     - Codebook buffer holds R * d * entry_bytes (usually small, fits easily)
@@ -54,7 +54,7 @@ class GPTVQTiler:
         sram_config: SRAMConfig,
         array_config: SystolicArrayConfig,
         dtype_config: DataTypeConfig,
-        gptvq_config: GPTVQConfig,
+        vq_config: VQConfig,
         double_buffer: bool = True,
     ):
         self.sram_size = sram_config.total_size_kb * 1024
@@ -64,17 +64,17 @@ class GPTVQTiler:
         self.acc_bytes = dtype_config.accumulator_bytes
         self.double_buffer = double_buffer
 
-        self.gptvq = gptvq_config
-        self.vector_dim = gptvq_config.vector_dim
-        self.codebook_size = gptvq_config.codebook_size
-        self.index_elem_bytes = gptvq_config.index_elem_bytes
-        self.codebook_entry_bytes = gptvq_config.codebook_entry_bytes
-        self.use_scaling = gptvq_config.use_scaling
-        self.scale_bytes = gptvq_config.scale_bytes if gptvq_config.use_scaling else 0
-        self.zp_bytes = gptvq_config.zero_point_bytes if gptvq_config.use_scaling else 0
+        self.vq = vq_config
+        self.vector_dim = vq_config.vector_dim
+        self.codebook_size = vq_config.codebook_size
+        self.index_elem_bytes = vq_config.index_elem_bytes
+        self.codebook_entry_bytes = vq_config.codebook_entry_bytes
+        self.use_scaling = vq_config.use_scaling
+        self.scale_bytes = vq_config.scale_bytes if vq_config.use_scaling else 0
+        self.zp_bytes = vq_config.zero_point_bytes if vq_config.use_scaling else 0
 
         # Buffer sizes from SRAM fractions
-        if gptvq_config.use_scaling:
+        if vq_config.use_scaling:
             self.codebook_buf_size = int(self.sram_size * sram_config.codebook_buffer_fraction)
             self.index_buf_size = int(self.sram_size * sram_config.index_buffer_fraction)
             self.scale_buf_size = int(self.sram_size * sram_config.scale_buffer_fraction)
@@ -101,8 +101,8 @@ class GPTVQTiler:
             - self.act_buf_size
         )
 
-    def compute_tiles(self, M: int, N: int, K: int) -> GPTVQTileConfig:
-        """Compute tile sizes for GPTVQ MatMul C[M,N] = W_deq[M,K] * A[K,N].
+    def compute_tiles(self, M: int, N: int, K: int) -> VQTileConfig:
+        """Compute tile sizes for VQ MatMul C[M,N] = W_deq[M,K] * A[K,N].
 
         Strategy:
         1. tile_m = min(M, array_rows), tile_n = min(N, array_cols)
@@ -153,7 +153,7 @@ class GPTVQTiler:
         # Max tile_k from dequant_weight buffer (tile_m × tile_k × entry_bytes)
         dq_budget = self.dequant_weight_buf_size // db_factor
         if tile_m > 0 and self.codebook_entry_bytes > 0:
-            max_k_dequant = dq_budget // (tile_m * self.codebook_entry_bytes)
+            max_k_dequant = int(dq_budget // (tile_m * self.codebook_entry_bytes))
         else:
             max_k_dequant = K
 
@@ -169,9 +169,9 @@ class GPTVQTiler:
 
         num_groups = math.ceil(tile_k / d)
 
-        codebook_bytes = self.codebook_size * d * self.codebook_entry_bytes
+        codebook_bytes = int(self.codebook_size * d * self.codebook_entry_bytes)
 
-        return GPTVQTileConfig(
+        return VQTileConfig(
             tile_m=tile_m,
             tile_n=tile_n,
             tile_k=tile_k,
@@ -187,7 +187,7 @@ class GPTVQTiler:
         )
 
     def estimate_dram_traffic(self, M: int, N: int, K: int) -> dict[str, int]:
-        """Estimate total DRAM traffic in bytes for a GPTVQ MatMul."""
+        """Estimate total DRAM traffic in bytes for a VQ MatMul."""
         tc = self.compute_tiles(M, N, K)
 
         codebook_loads = tc.num_m_tiles * tc.num_n_tiles

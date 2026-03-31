@@ -77,12 +77,8 @@ class TileScheduler:
         first_tile = tiles.popleft()
         slot_idx = self.double_buf.compute_slot.value
 
-        weight_done = cycle
-        if first_tile.load_weight:
-            weight_done = self._load_weight(first_tile, slot_idx, cycle)
-
-        act_done = self._load_activation(first_tile, slot_idx, weight_done)
-        data_ready_cycle = act_done  # weight → act sequential, so act_done is always last
+        weight_done, act_done = self._load_tiles_parallel(first_tile, slot_idx, cycle)
+        data_ready_cycle = max(weight_done, act_done)
 
         # Compute first tile
         cycles_info = self.systolic.analytical_cycles(
@@ -91,6 +87,9 @@ class TileScheduler:
         )
         compute_done_cycle = data_ready_cycle + cycles_info.total_cycles
         self._update_compute_stats(first_tile, cycles_info)
+
+        if self.dataflow != "OS" and (first_tile.accumulate or not first_tile.store_output):
+            compute_done_cycle = self._accumulate_output(first_tile, compute_done_cycle)
 
         # Store output if this is the last K-tile
         if first_tile.store_output:
@@ -106,12 +105,9 @@ class TileScheduler:
             # Prefetch: start loading next tile at the same time as previous compute
             prefetch_start = data_ready_cycle  # start prefetch when prev compute starts
 
-            weight_done = prefetch_start
-            if current_tile.load_weight:
-                weight_done = self._load_weight(current_tile, next_slot_idx, prefetch_start)
-
-            act_done = self._load_activation(current_tile, next_slot_idx, weight_done)
-            next_data_ready = act_done  # weight → act sequential, so act_done is always last
+            weight_done, act_done = self._load_tiles_parallel(
+                current_tile, next_slot_idx, prefetch_start)
+            next_data_ready = max(weight_done, act_done)
 
             # Wait for both: previous compute done AND next data ready
             compute_start = max(prev_compute_done, next_data_ready)
@@ -135,6 +131,9 @@ class TileScheduler:
             compute_done = compute_start + cycles_info.total_cycles
             self._update_compute_stats(current_tile, cycles_info)
 
+            if self.dataflow != "OS" and (current_tile.accumulate or not current_tile.store_output):
+                compute_done = self._accumulate_output(current_tile, compute_done)
+
             # Store output
             if current_tile.store_output:
                 compute_done = self._store_output(current_tile, compute_done)
@@ -151,20 +150,17 @@ class TileScheduler:
     def _execute_single_buffer(self, tiles: deque[TileOp], cycle: int) -> int:
         """Simple sequential execution without double buffering."""
         for tile in tiles:
-            weight_done = cycle
-            if tile.load_weight:
-                weight_done = self._load_weight(tile, 0, cycle)
-
-            # Use weight_done as start so dram_read_cycles measures actual
-            # act DRAM time only, not from tile start (which would include weight time).
-            act_done = self._load_activation(tile, 0, weight_done)
-            data_ready_cycle = act_done  # weight → act sequential, so act_done is always last
+            weight_done, act_done = self._load_tiles_parallel(tile, 0, cycle)
+            data_ready_cycle = max(weight_done, act_done)
 
             cycles_info = self.systolic.analytical_cycles(
                 tile.tile_m, tile.tile_n, tile.tile_k, dataflow=self.dataflow,
             )
             compute_done = data_ready_cycle + cycles_info.total_cycles
             self._update_compute_stats(tile, cycles_info)
+
+            if self.dataflow != "OS" and (tile.accumulate or not tile.store_output):
+                compute_done = self._accumulate_output(tile, compute_done)
 
             if tile.store_output:
                 compute_done = self._store_output(tile, compute_done)
@@ -174,31 +170,48 @@ class TileScheduler:
         self.stats.total_cycles = max(self.stats.total_cycles, cycle)
         return cycle
 
-    def _load_weight(self, tile: TileOp, slot_idx: int, cycle: int) -> int:
-        """Load weight tile from DRAM to SRAM buffer."""
-        dram_addr = self.weight_base_dram + tile.weight_dram_offset
-        sram_buf = self.weight_bufs[slot_idx]
-        size_bytes = tile.tile_m * tile.tile_k * self.systolic.dtype.num_bytes
+    def _load_tiles_parallel(
+        self, tile: TileOp, slot_idx: int, cycle: int
+    ) -> tuple[int, int]:
+        """Issue weight+activation DRAM reads concurrently, return (weight_done, act_done).
 
-        result = self.mem_ctrl.load_from_dram(dram_addr, sram_buf, size_bytes, cycle, "weight")
-        self.stats.memory.dram_read_bytes += size_bytes
-        self.stats.memory.dram_read_count += 1
-        self.stats.memory.dram_read_cycles += result.dram_cycles
-        self.stats.memory.sram_write_cycles += result.sram_cycles
-        return result.complete_cycle
+        Uses begin/end pattern so DRAMSim3 can exploit channel parallelism.
+        """
+        w_size = tile.tile_m * tile.tile_k * self.systolic.dtype.num_bytes
+        a_size = tile.tile_k * tile.tile_n * self.systolic.dtype.num_bytes
 
-    def _load_activation(self, tile: TileOp, slot_idx: int, cycle: int) -> int:
-        """Load activation tile from DRAM to SRAM buffer."""
-        dram_addr = self.act_base_dram + tile.activation_dram_offset
-        sram_buf = self.act_bufs[slot_idx]
-        size_bytes = tile.tile_k * tile.tile_n * self.systolic.dtype.num_bytes
+        # Begin: issue needed loads at the same cycle (no tick between them)
+        w_token = None
+        a_token = None
+        if tile.load_weight:
+            w_addr = self.weight_base_dram + tile.weight_dram_offset
+            w_token = self.mem_ctrl.begin_load_from_dram(w_addr, w_size, cycle, "weight")
+        if tile.load_activation:
+            a_addr = self.act_base_dram + tile.activation_dram_offset
+            a_token = self.mem_ctrl.begin_load_from_dram(a_addr, a_size, cycle, "activation")
 
-        result = self.mem_ctrl.load_from_dram(dram_addr, sram_buf, size_bytes, cycle, "activation")
-        self.stats.memory.dram_read_bytes += size_bytes
-        self.stats.memory.dram_read_count += 1
-        self.stats.memory.dram_read_cycles += result.dram_cycles
-        self.stats.memory.sram_write_cycles += result.sram_cycles
-        return result.complete_cycle
+        # End: tick until both complete
+        weight_done = cycle
+        if w_token is not None:
+            w_result = self.mem_ctrl.end_load_from_dram(
+                w_token, self.weight_bufs[slot_idx], w_size, cycle)
+            self.stats.memory.dram_read_bytes += w_size
+            self.stats.memory.dram_read_count += 1
+            self.stats.memory.dram_read_cycles += w_result.dram_cycles
+            self.stats.memory.sram_write_cycles += w_result.sram_cycles
+            weight_done = w_result.complete_cycle
+
+        act_done = cycle
+        if a_token is not None:
+            a_result = self.mem_ctrl.end_load_from_dram(
+                a_token, self.act_bufs[slot_idx], a_size, cycle)
+            self.stats.memory.dram_read_bytes += a_size
+            self.stats.memory.dram_read_count += 1
+            self.stats.memory.dram_read_cycles += a_result.dram_cycles
+            self.stats.memory.sram_write_cycles += a_result.sram_cycles
+            act_done = a_result.complete_cycle
+
+        return weight_done, act_done
 
     def _store_output(self, tile: TileOp, cycle: int) -> int:
         """Store output tile from SRAM to DRAM."""
@@ -211,6 +224,18 @@ class TileScheduler:
         self.stats.memory.sram_read_cycles += result.sram_cycles
         self.stats.memory.dram_write_cycles += result.dram_cycles
         return result.complete_cycle
+
+    def _accumulate_output(self, tile: TileOp, cycle: int) -> int:
+        """Partial-sum SRAM traffic for WS/IS accumulation between k-tiles."""
+        size = tile.tile_m * tile.tile_n * self.systolic.acc_dtype.num_bytes
+        done = cycle
+        if tile.accumulate:
+            done = self.output_buf.read(0, size, done)
+        if not tile.store_output:
+            done = self.output_buf.write(0, size, done)
+        self.stats.memory.accumulation_count += 1
+        self.stats.memory.accumulation_cycles += done - cycle
+        return done
 
     def _update_compute_stats(self, tile: TileOp, cycles_info) -> None:
         self.stats.compute.total_mac_ops += tile.tile_m * tile.tile_n * tile.tile_k

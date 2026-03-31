@@ -37,6 +37,9 @@ class MemoryStats:
     double_buffer_misses: int = 0
     double_buffer_stall_cycles: int = 0
 
+    accumulation_count: int = 0
+    accumulation_cycles: int = 0
+
 
 @dataclass
 class TileStats:
@@ -50,7 +53,7 @@ class TileStats:
 
 
 @dataclass
-class GPTVQStats:
+class VQStats:
     total_dequant_cycles: int = 0
     total_vectors_dequantized: int = 0
     codebook_load_bytes: int = 0
@@ -79,7 +82,7 @@ class SimStats:
         self.compute = ComputeStats()
         self.memory = MemoryStats()
         self.tile = TileStats()
-        self.gptvq = GPTVQStats()
+        self.vq = VQStats()
         self.layer_stats: list[LayerStats] = []
         self._timeline: list[dict] = []
 
@@ -127,6 +130,8 @@ class SimStats:
                 "double_buffer_hits": self.memory.double_buffer_hits,
                 "double_buffer_misses": self.memory.double_buffer_misses,
                 "double_buffer_stall_cycles": self.memory.double_buffer_stall_cycles,
+                "accumulation_count": self.memory.accumulation_count,
+                "accumulation_cycles": self.memory.accumulation_cycles,
             },
             "tile": {
                 "tile_m": self.tile.tile_m,
@@ -135,14 +140,14 @@ class SimStats:
                 "total_tiles": self.tile.total_tiles,
             },
         }
-        if self.gptvq.total_dequant_cycles > 0 or self.gptvq.total_vectors_dequantized > 0:
-            result["gptvq"] = {
-                "total_dequant_cycles": self.gptvq.total_dequant_cycles,
-                "total_vectors_dequantized": self.gptvq.total_vectors_dequantized,
-                "codebook_load_bytes": self.gptvq.codebook_load_bytes,
-                "index_load_bytes": self.gptvq.index_load_bytes,
-                "scale_load_bytes": self.gptvq.scale_load_bytes,
-                "compression_ratio": self.gptvq.compression_ratio,
+        if self.vq.total_dequant_cycles > 0 or self.vq.total_vectors_dequantized > 0:
+            result["vq"] = {
+                "total_dequant_cycles": self.vq.total_dequant_cycles,
+                "total_vectors_dequantized": self.vq.total_vectors_dequantized,
+                "codebook_load_bytes": self.vq.codebook_load_bytes,
+                "index_load_bytes": self.vq.index_load_bytes,
+                "scale_load_bytes": self.vq.scale_load_bytes,
+                "compression_ratio": self.vq.compression_ratio,
             }
         return result
 
@@ -173,11 +178,14 @@ class SimStats:
         print(f"  SRAM Bank Conflicts:   {mem['sram_bank_conflicts']:,}")
         print(f"  DB Hits/Misses:        {mem['double_buffer_hits']}/{mem['double_buffer_misses']}")
         print(f"  DB Stall Cycles:       {mem['double_buffer_stall_cycles']:,}")
+        if mem["accumulation_cycles"] > 0:
+            print(f"  Accum R/W (PS):        {mem['accumulation_cycles']:,} cycles  ({mem['accumulation_count']} events)")
         if mem["double_buffer_misses"] > 0 and mem["double_buffer_hits"] == 0:
             print("  (DB 0 hits: prefetch slower than compute → memory bound)")
-        if "gptvq" in s:
-            g = s["gptvq"]
-            print(f"  --- GPTVQ ---")
+        if "vq" in s:
+            g = s["vq"]
+            print()
+            print(f"  --- VQ ---")
             print(f"  Dequant Cycles:        {g['total_dequant_cycles']:,}")
             print(f"  Vectors Dequantized:   {g['total_vectors_dequantized']:,}")
             print(f"  Codebook Load:         {g['codebook_load_bytes']:,} bytes")

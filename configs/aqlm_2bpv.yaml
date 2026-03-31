@@ -1,0 +1,34 @@
+# aqlm_2bpv.yaml - AQLM 논문 CPU-friendly config (~2 bits per value)
+#
+# 논문 Table 5, 12: "2x8 gs8" (CPU/mobile-friendly setting)
+#   M=2 codebooks, B=8 bits/index, K=256 entries, g=8 group size
+#   BPV = M * B / g = 2 * 8 / 8 = 2.0 (codebook overhead 무시)
+#
+# Additive Quantization: W[i,j] = codebook1[idx1] + codebook2[idx2]
+#   추론 시 2개 독립 lookup → 합산 (num_stages=2로 모델링)
+#
+# Codebook: per-layer, FP16, 256 entries x 8-dim = 4KB per codebook
+extends: default.yaml
+
+name: AQLM-2x8-2bpv
+
+sram:
+  codebook_buffer_fraction: 0.10
+  index_buffer_fraction: 0.10
+  scale_buffer_fraction: 0.00
+  dequant_weight_buffer_fraction: 0.30
+  activation_buffer_fraction: 0.30
+  output_buffer_fraction: 0.20
+  codebook_sram:
+    num_banks: 16
+    port_type: single
+
+vq:
+  enabled: true
+  codebook_size: 256           # K=2^8=256 centroids per codebook
+  vector_dim: 8                # d=8 (group size)
+  index_bits: 8                # B=8 bits per index
+  num_stages: 2                # M=2 additive codebooks
+  use_scaling: false
+  codebook_dtype: FP16         # 논문: FP16 codebook vectors
+  dequant_pipeline_stages: 3

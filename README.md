@@ -8,7 +8,8 @@ Cycle-accurate event-driven NPU simulator with multi-dataflow systolic array, ba
 npu-sim/
 ├── configs/
 │   ├── default.yaml               # 32x32 array, 512KB SRAM, FP16, OS dataflow
-│   └── gptvq.yaml                 # GPTVQ config (R=16, d=2, 4-bit index)
+│   ├── vq.yaml                    # VQ 실험용 기본 config
+│   └── gptvq_3.125bpv.yaml       # GPTVQ 논문 설정 (d=2, k=64, INT8 codebook)
 ├── core/
 │   ├── config.py                  # YAML → dataclass config loader (NPUConfig, GPTVQConfig)
 │   ├── clock.py                   # Event-driven SimulationEngine (heapq, jump-to-next)
@@ -168,15 +169,16 @@ NPU Simulation Summary
 ============================================================
 ```
 
-### Config (gptvq.yaml)
+### Config (gptvq_3.125bpv.yaml — 논문 기본 설정)
 
 ```yaml
 gptvq:
   enabled: true
-  codebook_size: 16       # R: centroids 수 (4-bit index)
-  vector_dim: 2           # d: codebook vector 차원
-  index_bits: 4           # bits per index = log2(R)
-  use_scaling: false      # per-group scaling (s * codebook[idx] + z)
+  codebook_size: 64       # k=64 centroids (6-bit index)
+  vector_dim: 2           # d=2 (2D VQ)
+  index_bits: 6           # log2(64)
+  num_stages: 1           # standard VQ
+  use_scaling: true       # per-group scaling
+  codebook_dtype: INT8    # 논문 기본: 8-bit codebook quantization
   dequant_pipeline_stages: 3
-  dequant_throughput: 1   # vectors/cycle
 ```
