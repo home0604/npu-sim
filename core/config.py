@@ -87,6 +87,7 @@ class VQConfig:
     zero_point_dtype: str = "FP16"  # dtype for zero points z
     codebook_dtype: str = "FP16"  # dtype for codebook entries
     dequant_pipeline_stages: int = 3  # pipeline depth of dequant unit
+    dequant_mode: str = "separate"  # "separate" (default) or "fused" (WS preload inline lookup)
 
     _DTYPE_BYTES = {"FP16": 2, "BF16": 2, "FP32": 4, "INT8": 1, "INT4": 0.5}
 

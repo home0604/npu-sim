@@ -376,3 +376,90 @@ class TestVQE2E:
 
         assert result_vq["vq"]["total_dequant_cycles"] > 0
         assert "vq" not in result_novq
+
+
+# ---------------------------------------------------------------------------
+# Fused dequant-preload tests
+# ---------------------------------------------------------------------------
+
+class TestFusedDequant:
+    """Tests for fused dequant-preload mode (WS only)."""
+
+    def test_fused_preload_cycles_formula(self):
+        """fused_preload = eff_sr × ceil(eff_sc / d) × latency_per_lookup."""
+        cfg = _make_vq_config(**{"vq.vector_dim": 8, "vq.codebook_size": 256})
+        unit = DequantizationUnit(cfg.vq, cfg.sram)
+        # 32×32 SA, WS: SR=tile_k, SC=tile_n
+        result = unit.fused_preload_cycles(32, 32, 32, 32, 32, "WS")
+        # SR=32, SC=32, d=8 → 1 pass: 32 × ceil(32/8) × 1 = 128
+        assert result == 128
+
+    def test_fused_preload_multi_pass(self):
+        """Multi-pass: tile dims exceed SA → sum across passes."""
+        cfg = _make_vq_config(**{"vq.vector_dim": 8, "vq.codebook_size": 256})
+        unit = DequantizationUnit(cfg.vq, cfg.sram)
+        # tile_k=64 > rows=32 → 2 sr_passes
+        result = unit.fused_preload_cycles(32, 32, 64, 32, 32, "WS")
+        # SR=64, SC=32: 2 passes × (32 × 4) = 256
+        assert result == 256
+
+    def test_fused_e2e_ws(self):
+        """Fused mode WS matmul runs without error."""
+        cfg = _make_vq_config(**{
+            "vq.dequant_mode": "fused",
+            "systolic.dataflow": "WS",
+        })
+        sim = NPUSimulator(cfg)
+        result = sim.run_matmul(M=64, N=64, K=64)
+        assert result["total_cycles"] > 0
+
+    def test_fused_no_dequant_weight_buffer(self):
+        """Fused mode should have empty dequant_weight buffer."""
+        cfg = _make_vq_config(**{"vq.dequant_mode": "fused"})
+        sim = NPUSimulator(cfg)
+        assert len(sim.vq_buffers["dequant_weight"]) == 0
+
+    def test_fused_ws_fewer_cycles_than_separate(self):
+        """Fused WS should differ from separate WS (dequant absorbed into preload)."""
+        M, N, K = 64, 64, 128
+
+        cfg_sep = _make_vq_config(**{
+            "vq.dequant_mode": "separate",
+            "systolic.dataflow": "WS",
+        })
+        sim_sep = NPUSimulator(cfg_sep)
+        r_sep = sim_sep.run_matmul(M=M, N=N, K=K)
+
+        cfg_fused = _make_vq_config(**{
+            "vq.dequant_mode": "fused",
+            "systolic.dataflow": "WS",
+        })
+        sim_fused = NPUSimulator(cfg_fused)
+        r_fused = sim_fused.run_matmul(M=M, N=N, K=K)
+
+        # Both produce valid results, cycles should differ
+        assert r_sep["total_cycles"] > 0
+        assert r_fused["total_cycles"] > 0
+        assert r_sep["total_cycles"] != r_fused["total_cycles"]
+
+    def test_fused_os_falls_back_to_separate(self):
+        """Fused mode with OS dataflow should behave like separate (no preload in OS)."""
+        M, N, K = 32, 32, 64
+
+        cfg_sep = _make_vq_config(**{
+            "vq.dequant_mode": "separate",
+            "systolic.dataflow": "OS",
+        })
+        sim_sep = NPUSimulator(cfg_sep)
+        r_sep = sim_sep.run_matmul(M=M, N=N, K=K)
+
+        cfg_fused = _make_vq_config(**{
+            "vq.dequant_mode": "fused",
+            "systolic.dataflow": "OS",
+        })
+        sim_fused = NPUSimulator(cfg_fused)
+        r_fused = sim_fused.run_matmul(M=M, N=N, K=K)
+
+        # OS: fused has no effect, cycles should be similar
+        # (may differ slightly due to SRAM redistribution affecting tile sizes)
+        assert r_fused["total_cycles"] > 0

@@ -100,6 +100,34 @@ class DequantizationUnit:
         latency = self._latency_per_lookup()
         return self.pipeline_stages + num_lookups * latency
 
+    def fused_preload_cycles(
+        self, tile_m: int, tile_n: int, tile_k: int,
+        array_rows: int, array_cols: int, dataflow: str,
+    ) -> int:
+        """Fused dequant+preload cycles for WS dataflow.
+
+        Each cycle: 1 codebook lookup → d scalars → d PEs on SA top row.
+        Per SA row: ceil(eff_sc / d) lookups.  Per pass: eff_sr rows.
+        Lookup latency from codebook SRAM config (same as _latency_per_lookup).
+        """
+        if dataflow == "WS":
+            sr, sc = tile_k, tile_n
+        elif dataflow == "IS":
+            sr, sc = tile_k, tile_m
+        else:
+            sr, sc = tile_m, tile_n
+
+        R, C = array_rows, array_cols
+        d = self.vector_dim
+        lat = self._latency_per_lookup()
+        total = 0
+        for sp in range((sr + R - 1) // R):
+            eff_sr = min(R, sr - sp * R)
+            for cp in range((sc + C - 1) // C):
+                eff_sc = min(C, sc - cp * C)
+                total += eff_sr * math.ceil(eff_sc / d) * lat
+        return total
+
     def dequantize(
         self,
         indices: torch.Tensor,

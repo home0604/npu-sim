@@ -1,0 +1,9 @@
+# vq_fused.yaml - VQ with fused dequant-preload (WS only)
+# Codebook lookup happens inline during SA preload.
+# dequant_weight SRAM buffer eliminated.
+extends: vq.yaml
+
+name: VQ-Fused
+
+vq:
+  dequant_mode: fused

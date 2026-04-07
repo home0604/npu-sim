@@ -58,9 +58,11 @@ class VQScheduler:
         act_base_dram: int = 0,
         output_base_dram: int = 0,
         dataflow: str = "OS",
+        dequant_mode: str = "separate",
     ):
         self.engine = engine
         self.dataflow = dataflow
+        self.dequant_mode = dequant_mode
         self.systolic = systolic
         self.dequant_unit = dequant_unit
         self.mem_ctrl = mem_ctrl
@@ -114,7 +116,7 @@ class VQScheduler:
             first_tile.tile_m, first_tile.tile_n, first_tile.tile_k,
             dataflow=self.dataflow,
         )
-        compute_done_cycle = data_ready_cycle + cycles_info.total_cycles
+        compute_done_cycle = data_ready_cycle + self._effective_compute_cycles(first_tile, cycles_info)
         self._update_compute_stats(first_tile, cycles_info)
         if first_tile.load_indices:
             self._update_dequant_stats(first_tile, dequant_done - load_done)
@@ -166,7 +168,7 @@ class VQScheduler:
                 current_tile.tile_m, current_tile.tile_n, current_tile.tile_k,
                 dataflow=self.dataflow,
             )
-            compute_done = compute_start + cycles_info.total_cycles
+            compute_done = compute_start + self._effective_compute_cycles(current_tile, cycles_info)
             self._update_compute_stats(current_tile, cycles_info)
             if current_tile.load_indices:
                 self._update_dequant_stats(
@@ -206,7 +208,7 @@ class VQScheduler:
                 tile.tile_m, tile.tile_n, tile.tile_k,
                 dataflow=self.dataflow,
             )
-            compute_done = data_ready_cycle + cycles_info.total_cycles
+            compute_done = data_ready_cycle + self._effective_compute_cycles(tile, cycles_info)
             self._update_compute_stats(tile, cycles_info)
             if tile.load_indices:
                 self._update_dequant_stats(tile, dequant_done - load_done)
@@ -240,6 +242,9 @@ class VQScheduler:
             scale_done = self._load_scales(tile, slot_idx, idx_done)
 
         load_done = scale_done
+
+        if self.dequant_mode == "fused" and self.dataflow == "WS":
+            return load_done, load_done  # dequant absorbed into SA preload
 
         dequant_cycles = self.dequant_unit.dequant_cycles(tile.tile_m, tile.tile_k)
         dequant_done = load_done + dequant_cycles
@@ -346,6 +351,16 @@ class VQScheduler:
         self.stats.memory.sram_read_cycles += result.sram_cycles
         self.stats.memory.dram_write_cycles += result.dram_cycles
         return result.complete_cycle
+
+    def _effective_compute_cycles(self, tile: VQTileOp, cycles_info) -> int:
+        """Compute cycles with fused preload adjustment for WS."""
+        if (self.dequant_mode == "fused" and self.dataflow == "WS"
+                and tile.load_indices):
+            fused = self.dequant_unit.fused_preload_cycles(
+                tile.tile_m, tile.tile_n, tile.tile_k,
+                self.systolic.rows, self.systolic.cols, self.dataflow)
+            return cycles_info.total_cycles - cycles_info.preload_cycles + fused
+        return cycles_info.total_cycles
 
     def _update_compute_stats(self, tile: VQTileOp, cycles_info) -> None:
         self.stats.compute.total_mac_ops += tile.tile_m * tile.tile_n * tile.tile_k

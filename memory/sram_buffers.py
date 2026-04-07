@@ -137,6 +137,7 @@ def create_vq_buffer_partitions(
     use_scaling: bool = False,
     codebook_num_banks: int = 0,
     codebook_port_type: PortType | None = None,
+    dequant_mode: str = "separate",
 ) -> dict[str, list[SRAMBuffer]]:
     """Create VQ buffer partitions with separate BankedSRAM per buffer group.
 
@@ -159,7 +160,14 @@ def create_vq_buffer_partitions(
     codebook_size = int(total_size_bytes * codebook_fraction)
     index_size = int(total_size_bytes * index_fraction)
     scale_size = int(total_size_bytes * scale_fraction)
-    dequant_weight_size = int(total_size_bytes * dequant_weight_fraction)
+    if dequant_mode == "fused":
+        dequant_weight_size = 0
+        freed = int(total_size_bytes * dequant_weight_fraction)
+        activation_fraction_adj = freed / total_size_bytes / 2
+        activation_fraction += activation_fraction_adj
+        # remaining freed goes to output via subtraction
+    else:
+        dequant_weight_size = int(total_size_bytes * dequant_weight_fraction)
     act_size = int(total_size_bytes * activation_fraction)
     output_size = total_size_bytes - codebook_size - index_size - scale_size - dequant_weight_size - act_size
 
@@ -176,8 +184,8 @@ def create_vq_buffer_partitions(
     # Index + scale: share one BankedSRAM (both sequential, loaded together)
     idx_scale_sram = _make_sram(index_size + scale_size, num_banks=num_banks, **sram_args)
 
-    # Dequant weight, activation, output: each gets own BankedSRAM
-    dq_sram = _make_sram(dequant_weight_size, num_banks=num_banks, **sram_args)
+    # Dequant weight (separate mode only), activation, output
+    dq_sram = _make_sram(dequant_weight_size, num_banks=num_banks, **sram_args) if dequant_weight_size > 0 else None
     act_sram = _make_sram(act_size, num_banks=num_banks, **sram_args)
     output_sram = _make_sram(output_size, num_banks=num_banks, **sram_args)
 
@@ -201,11 +209,14 @@ def create_vq_buffer_partitions(
         else:
             buffers["scale"] = [SRAMBuffer(idx_scale_sram, index_size, 0, "scale_none")]
 
-        slot_dq = dequant_weight_size // 2
-        buffers["dequant_weight"] = [
-            SRAMBuffer(dq_sram, 0, slot_dq, "dequant_weight_A"),
-            SRAMBuffer(dq_sram, slot_dq, slot_dq, "dequant_weight_B"),
-        ]
+        if dq_sram is not None:
+            slot_dq = dequant_weight_size // 2
+            buffers["dequant_weight"] = [
+                SRAMBuffer(dq_sram, 0, slot_dq, "dequant_weight_A"),
+                SRAMBuffer(dq_sram, slot_dq, slot_dq, "dequant_weight_B"),
+            ]
+        else:
+            buffers["dequant_weight"] = []
 
         slot_act = act_size // 2
         buffers["activation"] = [
@@ -220,7 +231,10 @@ def create_vq_buffer_partitions(
         else:
             buffers["scale"] = [SRAMBuffer(idx_scale_sram, index_size, 0, "scale_none")]
 
-        buffers["dequant_weight"] = [SRAMBuffer(dq_sram, 0, dequant_weight_size, "dequant_weight")]
+        if dq_sram is not None:
+            buffers["dequant_weight"] = [SRAMBuffer(dq_sram, 0, dequant_weight_size, "dequant_weight")]
+        else:
+            buffers["dequant_weight"] = []
         buffers["activation"] = [SRAMBuffer(act_sram, 0, act_size, "activation")]
 
     buffers["output"] = [SRAMBuffer(output_sram, 0, output_size, "output")]

@@ -92,6 +92,13 @@ class VQTiler:
                 self.sram_size * (sram_config.activation_buffer_fraction + extra)
             )
 
+        # Fused mode: dequant_weight buffer eliminated, redistribute to act/output
+        if vq_config.dequant_mode == "fused":
+            freed = self.dequant_weight_buf_size
+            self.dequant_weight_buf_size = 0
+            self.act_buf_size += freed // 2
+            # remaining goes to output via the subtraction below
+
         self.out_buf_size = (
             self.sram_size
             - self.codebook_buf_size
@@ -151,11 +158,11 @@ class VQTiler:
             max_k_scale = K
 
         # Max tile_k from dequant_weight buffer (tile_m × tile_k × entry_bytes)
-        dq_budget = self.dequant_weight_buf_size // db_factor
-        if tile_m > 0 and self.codebook_entry_bytes > 0:
-            max_k_dequant = int(dq_budget // (tile_m * self.codebook_entry_bytes))
+        if self.dequant_weight_buf_size > 0:
+            dq_budget = self.dequant_weight_buf_size // db_factor
+            max_k_dequant = int(dq_budget // (tile_m * self.codebook_entry_bytes)) if tile_m > 0 and self.codebook_entry_bytes > 0 else K
         else:
-            max_k_dequant = K
+            max_k_dequant = K  # fused: no dequant_weight buffer needed
 
         tile_k = min(K, max_k_index, max_k_act, max_k_scale, max_k_dequant)
         tile_k = max(d, (tile_k // d) * d)

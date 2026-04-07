@@ -200,6 +200,7 @@ class NPUSimulator:
                 else PortType.SINGLE if cfg.sram.codebook_sram.port_type.lower() == "single"
                 else None
             ),
+            dequant_mode=cfg.vq.dequant_mode,
         )
 
         self.vq_tiler = VQTiler(
@@ -239,6 +240,7 @@ class NPUSimulator:
             act_base_dram=act_base_dram,
             output_base_dram=output_base_dram,
             dataflow=self.config.systolic.dataflow,
+            dequant_mode=self.config.vq.dequant_mode,
         )
 
     def run_matmul(
